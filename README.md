@@ -1,4 +1,5 @@
 # Texas Star Loan CRM
+config-check
 
 Next.js 16 app for **Texas Star Cash & Title Loans**: Wix form submissions, staff workflows, optional **customer portal**, SMS (Twilio), email (Resend), and status-based automation (Vercel cron).
 
