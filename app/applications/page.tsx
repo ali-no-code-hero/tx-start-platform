@@ -1,10 +1,13 @@
 import { ApplicationsTable } from "@/components/applications-table";
 import { getProfile } from "@/lib/auth";
 import {
+  applicationsListHasActiveFilters,
   applicationsListSearchParams,
+  fetchApplicationsMatchingCount,
   fetchApplicationsPage,
   fetchLoanTypeFilterOptions,
   parseApplicationsListQuery,
+  resolveApplicationsListSearch,
 } from "@/lib/applications-list";
 import { createClient } from "@/lib/supabase/server";
 import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
@@ -29,10 +32,48 @@ export default async function ApplicationsPage({
     locationsForFilters = locs ?? [];
   }
 
-  const { rows, total, hasNextPage, error, logContext } = await fetchApplicationsPage(
-    supabase,
-    listQuery,
-  );
+  const searchPrep = await resolveApplicationsListSearch(supabase, listQuery);
+  if (!searchPrep.ok) {
+    const { error, logContext } = searchPrep.failure;
+    await logSupabaseQueryErrorWithRequest(
+      "applications_list_query_failed",
+      error,
+      {
+        route: "/applications",
+        profileRole: profile.role,
+        profileId: profile.id,
+        locationId: profile.location_id,
+        query: "applications_search_resolve",
+        listQuery: {
+          page: listQuery.page,
+          pageSize: listQuery.pageSize,
+          qLen: listQuery.q.length,
+          status: listQuery.status,
+          urgent: listQuery.urgent,
+          locationFilterCount: listQuery.locationIds.length,
+          loanTypeFilterCount: listQuery.loanTypes.length,
+          unassignedOnly: listQuery.unassignedOnly,
+        },
+      },
+      logContext
+        ? { ...logContext, listFetchMode: "search_resolve" }
+        : null,
+    );
+    return (
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
+        Failed to load applications:{" "}
+        {[error.message, error.details, error.code].filter(Boolean).join(" — ") ||
+          "Something went wrong loading this list."}
+      </div>
+    );
+  }
+
+  const [listResult, matchingTotalCount] = await Promise.all([
+    fetchApplicationsPage(supabase, listQuery, searchPrep.resolved),
+    fetchApplicationsMatchingCount(supabase, listQuery, searchPrep.resolved),
+  ]);
+
+  const { rows, total, hasNextPage, error, logContext } = listResult;
 
   if (error) {
     await logSupabaseQueryErrorWithRequest(
@@ -101,6 +142,22 @@ export default async function ApplicationsPage({
               ? `Applications for your assigned location (${listQuery.pageSize} per page; filters and search apply across all you can access).`
               : `All locations (${listQuery.pageSize} per page; filters and search apply across the full dataset).`}
         </p>
+        {matchingTotalCount != null ? (
+          <p className="mt-2 text-sm tabular-nums text-muted-foreground">
+            <span className="font-semibold text-foreground">
+              {matchingTotalCount.toLocaleString()}
+            </span>{" "}
+            application{matchingTotalCount !== 1 ? "s" : ""}
+            {applicationsListHasActiveFilters(listQuery)
+              ? " match these filters"
+              : profile.role === "admin"
+                ? " in the system"
+                : profile.role === "staff"
+                  ? " you can access"
+                  : ""}
+            .
+          </p>
+        ) : null}
       </div>
       <ApplicationsTable
         rows={rows}

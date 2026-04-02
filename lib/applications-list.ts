@@ -300,6 +300,92 @@ async function resolveSearchCustomerAndLocationIds(
   return { ok: true, customerIds, locationIds };
 }
 
+/** Resolved customer/location id lists for search token (empty when no search). */
+export type ApplicationsListSearchResolved = {
+  token: string;
+  customerIds: string[];
+  locationIds: string[];
+};
+
+export async function resolveApplicationsListSearch(
+  supabase: SupabaseClient,
+  params: ApplicationsListQueryState,
+): Promise<
+  | { ok: true; resolved: ApplicationsListSearchResolved }
+  | { ok: false; failure: ApplicationsListFetchFailure }
+> {
+  const token = sanitizeSearchToken(params.q);
+  if (!token) {
+    return { ok: true, resolved: { token: "", customerIds: [], locationIds: [] } };
+  }
+  const result = await resolveSearchCustomerAndLocationIds(supabase, token);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    resolved: {
+      token,
+      customerIds: result.customerIds,
+      locationIds: result.locationIds,
+    },
+  };
+}
+
+export function applicationsListHasActiveFilters(s: ApplicationsListQueryState): boolean {
+  return (
+    s.q.trim().length > 0 ||
+    s.status !== "all" ||
+    s.urgent !== "all" ||
+    s.locationIds.length > 0 ||
+    s.unassignedOnly ||
+    s.loanTypes.length > 0
+  );
+}
+
+function applyApplicationsListSearchOr(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder
+  q: any,
+  resolved: ApplicationsListSearchResolved,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  if (!resolved.token) return q;
+  const ilike = `%${resolved.token}%`;
+  const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
+  const statusMatches = APPLICATION_STATUSES.filter((s) =>
+    s.toLowerCase().includes(resolved.token.toLowerCase()),
+  );
+  if (statusMatches.length > 0) {
+    orParts.push(`status.in.(${statusMatches.join(",")})`);
+  }
+  if (resolved.customerIds.length > 0) {
+    orParts.push(`customer_id.in.(${resolved.customerIds.join(",")})`);
+  }
+  if (resolved.locationIds.length > 0) {
+    orParts.push(`location_id.in.(${resolved.locationIds.join(",")})`);
+  }
+  return q.or(orParts.join(","));
+}
+
+/**
+ * Total rows matching current filters + search (RLS-scoped). Separate HEAD request with
+ * estimated count so the paginated list stays fast; may be approximate on very large tables.
+ */
+export async function fetchApplicationsMatchingCount(
+  supabase: SupabaseClient,
+  params: ApplicationsListQueryState,
+  resolved: ApplicationsListSearchResolved,
+): Promise<number | null> {
+  try {
+    let q = supabase.from("applications").select("id", { count: "estimated", head: true });
+    q = applyApplicationListFilters(q, params);
+    q = applyApplicationsListSearchOr(q, resolved);
+    const { count, error } = await q;
+    if (error) return null;
+    return typeof count === "number" ? count : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchLoanTypeFilterOptions(
   supabase: SupabaseClient,
 ): Promise<{ options: string[]; hasUnknown: boolean }> {
@@ -338,53 +424,22 @@ export type ApplicationsListFetchResult = {
 export async function fetchApplicationsPage(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
+  resolved: ApplicationsListSearchResolved,
 ): Promise<ApplicationsListFetchResult> {
   try {
-    const { page, pageSize, q } = params;
+    const { page, pageSize } = params;
     const from = (page - 1) * pageSize;
     /** Fetch one extra row so we know if another page exists without a global COUNT (avoids statement_timeout on large tables). */
     const to = from + pageSize;
 
-    const token = sanitizeSearchToken(q);
-    let customerIdsForSearch: string[] = [];
-    let searchLocationIds: string[] = [];
-
-    if (token.length > 0) {
-      const resolved = await resolveSearchCustomerAndLocationIds(supabase, token);
-      if (!resolved.ok) {
-        return resolved.failure;
-      }
-      customerIdsForSearch = resolved.customerIds;
-      searchLocationIds = resolved.locationIds;
-    }
-
-    // Omit PostgREST count entirely: even "estimated" can still be expensive enough to hit
-    // statement_timeout on very large `applications` under RLS. Use pageSize+1 to detect "next page".
+    // Omit PostgREST count on this request: use pageSize+1 to detect "next page".
     let dataQuery = supabase
       .from("applications")
       .select(APPLICATION_FLAT_SELECT)
       .order("created_at", { ascending: false });
 
     dataQuery = applyApplicationListFilters(dataQuery, params);
-
-    if (token.length > 0) {
-      const ilike = `%${token}%`;
-      const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
-      const statusMatches = APPLICATION_STATUSES.filter((s) =>
-        s.toLowerCase().includes(token.toLowerCase()),
-      );
-      if (statusMatches.length > 0) {
-        orParts.push(`status.in.(${statusMatches.join(",")})`);
-      }
-      if (customerIdsForSearch.length > 0) {
-        orParts.push(`customer_id.in.(${customerIdsForSearch.join(",")})`);
-      }
-      if (searchLocationIds.length > 0) {
-        orParts.push(`location_id.in.(${searchLocationIds.join(",")})`);
-      }
-      const searchOr = orParts.join(",");
-      dataQuery = dataQuery.or(searchOr);
-    }
+    dataQuery = applyApplicationsListSearchOr(dataQuery, resolved);
 
     const pagedQuery = dataQuery.range(from, to);
     const listUrlLen = getPostgrestUrlLength(pagedQuery);
