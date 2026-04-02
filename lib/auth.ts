@@ -17,11 +17,16 @@ export async function getProfile(): Promise<Profile | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
+  const { data: rpcRows, error: rpcError } = await supabase.rpc("get_my_profile");
+  if (!rpcError && Array.isArray(rpcRows) && rpcRows.length > 0) {
+    return rpcRows[0] as Profile;
+  }
+
   const { data, error } = await supabase
     .from("profiles")
     .select("id,email,role,location_id,first_name,last_name")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
   if (error || !data) return null;
   return data as Profile;

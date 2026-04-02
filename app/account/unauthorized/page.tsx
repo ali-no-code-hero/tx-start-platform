@@ -17,9 +17,13 @@ export default async function UnauthorizedAccountPage() {
             No CRM access for this account
           </h1>
           <p className="text-sm text-zinc-400">
-            You are signed in, but there is no staff profile linked to your user in the database.
-            Ask a Texas Star administrator to invite you or confirm your account is provisioned in
-            Supabase.
+            You are signed in, but the app could not load a profile row for your auth user. In
+            Supabase, <span className="text-zinc-300">public.profiles.id</span> must equal{" "}
+            <span className="text-zinc-300">Authentication → Users → User UID</span> for this
+            session. If you created the profile by hand, the UUIDs often do not match.
+          </p>
+          <p className="break-all font-mono text-xs text-zinc-500">
+            Signed-in user id: {user.id}
           </p>
         </div>
         <div className="flex justify-center">
