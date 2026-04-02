@@ -41,6 +41,20 @@ Next.js 16 app for **Texas Star Cash & Title Loans**: Wix form submissions, staf
    npm run dev
    ```
 
+## Passwordless sign-in (Supabase Auth)
+
+The login page uses **email OTP / magic link** and **SMS OTP**. Only users that already exist in Supabase Auth can sign in (`shouldCreateUser: false`).
+
+**Supabase dashboard**
+
+1. **Authentication → Providers → Email** — enable; turn on **email OTP** (or users can still use the **magic link**, which hits `GET /auth/callback` to exchange the code for a session).
+2. **Authentication → Providers → Phone** — enable and attach **Twilio** (or your SMS provider). This is **separate** from the app’s Twilio env vars used for CRM outbound SMS.
+3. **Authentication → URL configuration** — set **Site URL** to your deployed origin (e.g. `https://your-app.vercel.app`). Under **Redirect URLs**, add:
+   - `http://localhost:3000/auth/callback` (local)
+   - `https://your-domain/auth/callback` (production)
+
+**Phone sign-in requirement:** the user’s **Auth** record must include that phone number (verified). CRM `customers.phone` alone does not update Supabase Auth; link or add the phone in Supabase (e.g. after invite, or via Admin API) if borrowers should sign in with SMS.
+
 ## Customer portal
 
 - Admins invite borrowers from an **application detail** page: **Invite to customer portal**.
