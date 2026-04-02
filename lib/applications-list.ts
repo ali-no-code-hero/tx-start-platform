@@ -137,7 +137,8 @@ function getPostgrestUrlLength(builder: unknown): number | undefined {
 
 export type ApplicationsListFetchFailure = {
   rows: ApplicationRow[];
-  total: number;
+  total: number | null;
+  hasNextPage: boolean;
   error: PostgrestLikeError;
   logContext: Record<string, unknown>;
 };
@@ -150,6 +151,7 @@ function buildFailure(
   return {
     rows: [],
     total: 0,
+    hasNextPage: false,
     error: coercePostgrestLikeError(parts.error, {
       status: parts.status,
       statusText: parts.statusText,
@@ -325,7 +327,9 @@ export async function fetchLoanTypeFilterOptions(
 
 export type ApplicationsListFetchResult = {
   rows: ApplicationRow[];
-  total: number;
+  /** Exact row count when the last page is known; `null` when more rows may exist after this page. */
+  total: number | null;
+  hasNextPage: boolean;
   error: PostgrestLikeError | null;
   /** Merge into Vercel log `diag` when `error` is set. */
   logContext?: Record<string, unknown>;
@@ -338,7 +342,8 @@ export async function fetchApplicationsPage(
   try {
     const { page, pageSize, q } = params;
     const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
+    /** Fetch one extra row so we know if another page exists without a global COUNT (avoids statement_timeout on large tables). */
+    const to = from + pageSize;
 
     const token = sanitizeSearchToken(q);
     let customerIdsForSearch: string[] = [];
@@ -353,11 +358,11 @@ export async function fetchApplicationsPage(
       searchLocationIds = resolved.locationIds;
     }
 
-    // "exact" count runs COUNT(*) over the full filtered set and hits statement_timeout on large
-    // tables (admin, no filters). "estimated" uses exact when cheap, planner stats when large.
+    // Omit PostgREST count entirely: even "estimated" can still be expensive enough to hit
+    // statement_timeout on very large `applications` under RLS. Use pageSize+1 to detect "next page".
     let dataQuery = supabase
       .from("applications")
-      .select(APPLICATION_FLAT_SELECT, { count: "estimated" })
+      .select(APPLICATION_FLAT_SELECT)
       .order("created_at", { ascending: false });
 
     dataQuery = applyApplicationListFilters(dataQuery, params);
@@ -393,8 +398,25 @@ export async function fetchApplicationsPage(
       );
     }
 
-    const flatRows = (pageRes.data ?? []) as FlatApplicationRow[];
-    const total = pageRes.count ?? 0;
+    const rawFlat = (pageRes.data ?? []) as FlatApplicationRow[];
+
+    let hasNextPage: boolean;
+    let total: number | null;
+    let flatRows: FlatApplicationRow[];
+
+    if (rawFlat.length === 0) {
+      hasNextPage = false;
+      flatRows = [];
+      total = from === 0 ? 0 : null;
+    } else if (rawFlat.length > pageSize) {
+      hasNextPage = true;
+      total = null;
+      flatRows = rawFlat.slice(0, pageSize);
+    } else {
+      hasNextPage = false;
+      total = from + rawFlat.length;
+      flatRows = rawFlat;
+    }
 
     const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
     const uniqueLocationIds = [
@@ -470,12 +492,14 @@ export async function fetchApplicationsPage(
     return {
       rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
       total,
+      hasNextPage,
       error: null,
     };
   } catch (unexpected) {
     return {
       rows: [],
       total: 0,
+      hasNextPage: false,
       error: coercePostgrestLikeError(unexpected, { status: 0, statusText: "" }),
       logContext: {
         step: "applications_list_unexpected",

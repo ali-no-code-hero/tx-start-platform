@@ -29,7 +29,10 @@ export default async function ApplicationsPage({
     locationsForFilters = locs ?? [];
   }
 
-  const { rows, total, error, logContext } = await fetchApplicationsPage(supabase, listQuery);
+  const { rows, total, hasNextPage, error, logContext } = await fetchApplicationsPage(
+    supabase,
+    listQuery,
+  );
 
   if (error) {
     await logSupabaseQueryErrorWithRequest(
@@ -55,7 +58,7 @@ export default async function ApplicationsPage({
       logContext
         ? {
             ...logContext,
-            listFetchMode: "single_rest_select_with_estimated_count",
+            listFetchMode: "single_rest_select_no_count_overshoot_one",
           }
         : null,
     );
@@ -70,14 +73,22 @@ export default async function ApplicationsPage({
 
   const loanTypesMeta = await fetchLoanTypeFilterOptions(supabase);
 
-  const totalPages = Math.max(1, Math.ceil(total / listQuery.pageSize));
-  if (total > 0 && listQuery.page > totalPages) {
+  if (rows.length === 0 && listQuery.page > 1) {
+    redirect(
+      `/applications?${applicationsListSearchParams({ ...listQuery, page: 1 }).toString()}`,
+    );
+  }
+
+  const totalPages =
+    total != null ? Math.max(1, Math.ceil(total / listQuery.pageSize)) : null;
+  if (total != null && total > 0 && totalPages != null && listQuery.page > totalPages) {
     redirect(
       `/applications?${applicationsListSearchParams({ ...listQuery, page: totalPages }).toString()}`,
     );
   }
 
-  const safePage = Math.min(listQuery.page, totalPages);
+  const safePage =
+    totalPages != null ? Math.min(listQuery.page, totalPages) : listQuery.page;
 
   return (
     <div className="space-y-6">
@@ -94,6 +105,7 @@ export default async function ApplicationsPage({
       <ApplicationsTable
         rows={rows}
         totalCount={total}
+        hasNextPage={hasNextPage}
         page={safePage}
         pageSize={listQuery.pageSize}
         queryState={listQuery}

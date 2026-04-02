@@ -73,6 +73,7 @@ function statusVariant(s: ApplicationStatus) {
 export function ApplicationsTable({
   rows,
   totalCount,
+  hasNextPage,
   page,
   pageSize,
   queryState,
@@ -83,7 +84,9 @@ export function ApplicationsTable({
   hasUnknownLoanType = false,
 }: {
   rows: ApplicationRow[];
-  totalCount: number;
+  /** Exact total when known (last page or full count); `null` when more rows may exist after this page. */
+  totalCount: number | null;
+  hasNextPage: boolean;
   page: number;
   pageSize: number;
   queryState: ApplicationsListQueryState;
@@ -122,9 +125,11 @@ export function ApplicationsTable({
   };
 
   const showLoanTypeFilters = loanTypeOptions.length > 0 || hasUnknownLoanType;
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-  const from = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
-  const to = Math.min(page * pageSize, totalCount);
+  const totalPages =
+    totalCount != null ? Math.max(1, Math.ceil(totalCount / pageSize)) : null;
+  const from =
+    rows.length === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = from + rows.length - 1;
 
   return (
     <div className="space-y-4">
@@ -360,9 +365,13 @@ export function ApplicationsTable({
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
-          {totalCount === 0
+          {rows.length === 0
             ? "No results"
-            : `Showing ${from}–${to} of ${totalCount}`}
+            : totalCount != null
+              ? `Showing ${from}–${to} of ${totalCount}`
+              : hasNextPage
+                ? `Showing ${from}–${to}+`
+                : `Showing ${from}–${to}`}
         </p>
         <div className="flex items-center gap-2">
           {page > 1 ? (
@@ -378,9 +387,9 @@ export function ApplicationsTable({
             </Button>
           )}
           <span className="text-sm text-muted-foreground tabular-nums">
-            Page {page} of {totalPages}
+            {totalPages != null ? `Page ${page} of ${totalPages}` : `Page ${page}`}
           </span>
-          {page < totalPages ? (
+          {(totalPages != null ? page < totalPages : hasNextPage) ? (
             <Link
               href={listHref(pathname, patchListQuery(queryState, { page: page + 1 }))}
               className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
