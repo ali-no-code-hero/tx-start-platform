@@ -11,6 +11,9 @@ import { toast } from "sonner";
 
 type Channel = "email" | "phone";
 
+/** Supabase email/SMS OTP token length (matches Auth template `{{ .Token }}`). */
+const OTP_DIGIT_COUNT = 8;
+
 function safeNext(next: string | null): string {
   const fallback = "/applications";
   if (!next || !next.startsWith("/") || next.startsWith("//")) return fallback;
@@ -83,7 +86,9 @@ export function LoginForm() {
         }
         setEmail(trimmed);
         setStep("verify");
-        toast.success("Check your email for your 6-digit sign-in code.");
+        toast.success(
+          `Check your email for your ${OTP_DIGIT_COUNT}-digit sign-in code.`,
+        );
       } else {
         const e164 = toE164Us(phoneRaw);
         if (!e164) {
@@ -111,8 +116,8 @@ export function LoginForm() {
 
   async function verifyCode() {
     const code = otp.replace(/\D/g, "");
-    if (code.length !== 6) {
-      toast.error("Enter the 6-digit code");
+    if (code.length !== OTP_DIGIT_COUNT) {
+      toast.error(`Enter the ${OTP_DIGIT_COUNT}-digit code`);
       return;
     }
     setLoading(true);
@@ -234,22 +239,22 @@ export function LoginForm() {
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="otp" className="text-zinc-200">
-              6-digit code
+              {OTP_DIGIT_COUNT}-digit code
             </Label>
             <Input
               id="otp"
               inputMode="numeric"
               autoComplete="one-time-code"
-              maxLength={6}
+              maxLength={OTP_DIGIT_COUNT}
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/[^\d]/g, ""))}
-              placeholder="000000"
+              placeholder="00000000"
               className="border-zinc-700 bg-zinc-950 text-center font-mono text-lg tracking-widest text-zinc-50"
             />
             <p className="text-xs text-zinc-500">
               {channel === "email"
-                ? "Enter the 6-digit code from your email."
-                : "Enter the code from your text message."}
+                ? `Enter the ${OTP_DIGIT_COUNT}-digit code from your email.`
+                : `Enter the ${OTP_DIGIT_COUNT}-digit code from your text message.`}
             </p>
           </div>
           <Button
