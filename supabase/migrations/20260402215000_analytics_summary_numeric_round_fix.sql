@@ -1,6 +1,5 @@
--- Analytics: optional filters, breakdowns, dollar totals, and supporting KPIs (admin-only RPC).
-
-drop function if exists public.analytics_summary(date, date);
+-- PG has round(numeric, int) but not round(double precision, int). percentile_cont / extract
+-- paths return float8; cast to numeric before round(..., 2). Idempotent replace for deployed DBs.
 
 create or replace function public.analytics_summary(
   range_start date,

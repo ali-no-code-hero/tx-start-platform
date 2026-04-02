@@ -6,12 +6,15 @@ import { APPLICATION_STATUSES } from "@/lib/types";
 export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 25;
 export const APPLICATION_LIST_PAGE_SIZE_MAX = 100;
 const SEARCH_IDS_CAP = 200;
-const LOAN_TYPE_SCAN_LIMIT = 5000;
+const LOAN_TYPE_SCAN_LIMIT = 1500;
+
 const MAX_LOAN_FILTERS = 48;
 const MAX_LOC_FILTERS = 64;
 
-const APPLICATION_SELECT = `
+/** Flat select — no embedded resources (avoids expensive PostgREST joins + RLS per nested row). */
+const APPLICATION_FLAT_SELECT = `
   id,
+  customer_id,
   status,
   created_at,
   urgent_same_day,
@@ -19,9 +22,7 @@ const APPLICATION_SELECT = `
   loan_amount_approved,
   type_of_loan,
   location_id,
-  submission_metadata,
-  customers ( id, first_name, last_name, email, phone ),
-  locations ( name )
+  submission_metadata
 `;
 
 const UUID_RE =
@@ -114,29 +115,118 @@ function escapePostgrestInToken(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function mapApplicationRows(
-  applications: Record<string, unknown>[],
+type FlatApplicationRow = {
+  id: string;
+  customer_id: string;
+  status: ApplicationStatus;
+  created_at: string;
+  urgent_same_day: boolean;
+  loan_amount_requested: number | null;
+  loan_amount_approved: number | null;
+  type_of_loan: string | null;
+  location_id: string | null;
+  submission_metadata: Record<string, unknown> | null;
+};
+
+function mapFlatToApplicationRows(
+  apps: FlatApplicationRow[],
+  customersById: Map<
+    string,
+    { id: string; first_name: string; last_name: string; email: string; phone: string | null }
+  >,
+  locationsById: Map<string, { name: string }>,
 ): ApplicationRow[] {
-  return applications.map((a) => {
-    const cust = a.customers as
-      | { id: string; first_name: string; last_name: string; email: string; phone: string | null }
-      | { id: string; first_name: string; last_name: string; email: string; phone: string | null }[]
-      | null;
-    const loc = a.locations as { name: string } | { name: string }[] | null;
-    return {
-      id: a.id as string,
-      status: a.status as ApplicationStatus,
-      created_at: a.created_at as string,
-      urgent_same_day: a.urgent_same_day as boolean,
-      loan_amount_requested: a.loan_amount_requested as number | null,
-      loan_amount_approved: a.loan_amount_approved as number | null,
-      type_of_loan: a.type_of_loan as string | null,
-      location_id: a.location_id as string | null,
-      submission_metadata: a.submission_metadata as Record<string, unknown> | null,
-      customers: Array.isArray(cust) ? cust[0] ?? null : cust,
-      locations: Array.isArray(loc) ? loc[0] ?? null : loc,
-    };
-  });
+  return apps.map((a) => ({
+    id: a.id,
+    status: a.status,
+    created_at: a.created_at,
+    urgent_same_day: a.urgent_same_day,
+    loan_amount_requested: a.loan_amount_requested,
+    loan_amount_approved: a.loan_amount_approved,
+    type_of_loan: a.type_of_loan,
+    location_id: a.location_id,
+    submission_metadata: a.submission_metadata,
+    customers: customersById.get(a.customer_id) ?? null,
+    locations: a.location_id ? locationsById.get(a.location_id) ?? null : null,
+  }));
+}
+
+/**
+ * Shared filters for list + count queries. Uses a loose type so the same logic applies to
+ * different PostgREST select shapes (full row vs id-only head count).
+ */
+function applyApplicationListFilters(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder differs per select()
+  q: any,
+  params: ApplicationsListQueryState,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  const { status, urgent, locationIds, unassignedOnly, loanTypes } = params;
+
+  if (status !== "all") {
+    q = q.eq("status", status);
+  }
+
+  if (urgent === "yes") {
+    q = q.eq("urgent_same_day", true);
+  } else if (urgent === "no") {
+    q = q.eq("urgent_same_day", false);
+  }
+
+  const hasLoc = locationIds.length > 0 || unassignedOnly;
+  if (hasLoc) {
+    if (unassignedOnly && locationIds.length === 0) {
+      q = q.is("location_id", null);
+    } else if (!unassignedOnly && locationIds.length > 0) {
+      q = q.in("location_id", locationIds);
+    } else {
+      q = q.or(`location_id.is.null,location_id.in.(${locationIds.join(",")})`);
+    }
+  }
+
+  if (loanTypes.length > 0) {
+    const wantUnknown = loanTypes.includes("Unknown");
+    const known = loanTypes.filter((l) => l !== "Unknown");
+    if (wantUnknown && known.length > 0) {
+      const inList = known.map(escapePostgrestInToken).join(",");
+      q = q.or(`type_of_loan.is.null,type_of_loan.eq.,type_of_loan.in.(${inList})`);
+    } else if (wantUnknown) {
+      q = q.or("type_of_loan.is.null,type_of_loan.eq.");
+    } else {
+      q = q.in("type_of_loan", known);
+    }
+  }
+
+  return q;
+}
+
+async function resolveSearchCustomerAndLocationIds(
+  supabase: SupabaseClient,
+  token: string,
+): Promise<{ customerIds: string[]; locationIds: string[]; error: Error | null }> {
+  const ilike = `%${token}%`;
+
+  const [custRes, locRes] = await Promise.all([
+    supabase
+      .from("customers")
+      .select("id")
+      .or(
+        `first_name.ilike.${ilike},last_name.ilike.${ilike},email.ilike.${ilike},phone.ilike.${ilike}`,
+      )
+      .limit(SEARCH_IDS_CAP),
+    supabase.from("locations").select("id").ilike("name", ilike).limit(SEARCH_IDS_CAP),
+  ]);
+
+  if (custRes.error) {
+    return { customerIds: [], locationIds: [], error: new Error(custRes.error.message) };
+  }
+  if (locRes.error) {
+    return { customerIds: [], locationIds: [], error: new Error(locRes.error.message) };
+  }
+
+  const customerIds = (custRes.data ?? []).map((row) => (row as { id: string }).id);
+  const locationIds = (locRes.data ?? []).map((row) => (row as { id: string }).id);
+  return { customerIds, locationIds, error: null };
 }
 
 export async function fetchLoanTypeFilterOptions(
@@ -168,102 +258,117 @@ export async function fetchApplicationsPage(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
 ): Promise<{ rows: ApplicationRow[]; total: number; error: Error | null }> {
-  const { page, pageSize, q, status, urgent, locationIds, unassignedOnly, loanTypes } =
-    params;
+  const { page, pageSize, q } = params;
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  let query = supabase
+  const token = sanitizeSearchToken(q);
+  let customerIdsForSearch: string[] = [];
+  let searchLocationIds: string[] = [];
+
+  if (token.length > 0) {
+    const resolved = await resolveSearchCustomerAndLocationIds(supabase, token);
+    if (resolved.error) {
+      return { rows: [], total: 0, error: resolved.error };
+    }
+    customerIdsForSearch = resolved.customerIds;
+    searchLocationIds = resolved.locationIds;
+  }
+
+  let dataQuery = supabase
     .from("applications")
-    .select(APPLICATION_SELECT, { count: "exact" })
+    .select(APPLICATION_FLAT_SELECT)
     .order("created_at", { ascending: false });
 
-  if (status !== "all") {
-    query = query.eq("status", status);
-  }
+  let countQuery = supabase
+    .from("applications")
+    .select("id", { count: "exact", head: true });
 
-  if (urgent === "yes") {
-    query = query.eq("urgent_same_day", true);
-  } else if (urgent === "no") {
-    query = query.eq("urgent_same_day", false);
-  }
+  dataQuery = applyApplicationListFilters(dataQuery, params);
+  countQuery = applyApplicationListFilters(countQuery, params);
 
-  const hasLoc = locationIds.length > 0 || unassignedOnly;
-  if (hasLoc) {
-    if (unassignedOnly && locationIds.length === 0) {
-      query = query.is("location_id", null);
-    } else if (!unassignedOnly && locationIds.length > 0) {
-      query = query.in("location_id", locationIds);
-    } else {
-      query = query.or(
-        `location_id.is.null,location_id.in.(${locationIds.join(",")})`,
-      );
-    }
-  }
-
-  if (loanTypes.length > 0) {
-    const wantUnknown = loanTypes.includes("Unknown");
-    const known = loanTypes.filter((l) => l !== "Unknown");
-    if (wantUnknown && known.length > 0) {
-      const inList = known.map(escapePostgrestInToken).join(",");
-      query = query.or(`type_of_loan.is.null,type_of_loan.eq.,type_of_loan.in.(${inList})`);
-    } else if (wantUnknown) {
-      query = query.or("type_of_loan.is.null,type_of_loan.eq.");
-    } else {
-      query = query.in("type_of_loan", known);
-    }
-  }
-
-  const token = sanitizeSearchToken(q);
   if (token.length > 0) {
     const ilike = `%${token}%`;
-
-    const [custRes, locRes] = await Promise.all([
-      Promise.all([
-        supabase.from("customers").select("id").ilike("first_name", ilike).limit(SEARCH_IDS_CAP),
-        supabase.from("customers").select("id").ilike("last_name", ilike).limit(SEARCH_IDS_CAP),
-        supabase.from("customers").select("id").ilike("email", ilike).limit(SEARCH_IDS_CAP),
-        supabase.from("customers").select("id").ilike("phone", ilike).limit(SEARCH_IDS_CAP),
-      ]),
-      supabase.from("locations").select("id").ilike("name", ilike).limit(SEARCH_IDS_CAP),
-    ]);
-
-    const customerIdSet = new Set<string>();
-    for (const r of custRes) {
-      if (r.error) {
-        return { rows: [], total: 0, error: new Error(r.error.message) };
-      }
-      for (const row of r.data ?? []) {
-        customerIdSet.add((row as { id: string }).id);
-      }
+    const orParts: string[] = [
+      `type_of_loan.ilike.${ilike}`,
+      `status.ilike.${ilike}`,
+    ];
+    if (customerIdsForSearch.length > 0) {
+      orParts.push(`customer_id.in.(${customerIdsForSearch.join(",")})`);
     }
-    if (locRes.error) {
-      return { rows: [], total: 0, error: new Error(locRes.error.message) };
-    }
-    const searchLocationIds = (locRes.data ?? []).map((row) => (row as { id: string }).id);
-
-    const customerIds = [...customerIdSet];
-    const orParts: string[] = [];
-    if (customerIds.length > 0) {
-      orParts.push(`customer_id.in.(${customerIds.join(",")})`);
-    }
-    orParts.push(`type_of_loan.ilike.${ilike}`);
-    orParts.push(`status.ilike.${ilike}`);
     if (searchLocationIds.length > 0) {
       orParts.push(`location_id.in.(${searchLocationIds.join(",")})`);
     }
-    query = query.or(orParts.join(","));
+    const searchOr = orParts.join(",");
+    dataQuery = dataQuery.or(searchOr);
+    countQuery = countQuery.or(searchOr);
   }
 
-  const { data: applications, error, count } = await query.range(from, to);
+  const [pageRes, countRes] = await Promise.all([
+    dataQuery.range(from, to),
+    countQuery,
+  ]);
 
-  if (error) {
-    return { rows: [], total: 0, error: new Error(error.message) };
+  if (pageRes.error) {
+    return { rows: [], total: 0, error: new Error(pageRes.error.message) };
+  }
+  if (countRes.error) {
+    return { rows: [], total: 0, error: new Error(countRes.error.message) };
+  }
+
+  const flatRows = (pageRes.data ?? []) as FlatApplicationRow[];
+  const total = countRes.count ?? 0;
+
+  const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
+  const uniqueLocationIds = [
+    ...new Set(
+      flatRows.map((r) => r.location_id).filter((id): id is string => id != null && id !== ""),
+    ),
+  ];
+
+  const [customersRes, locationsRes] = await Promise.all([
+    uniqueCustomerIds.length > 0
+      ? supabase
+          .from("customers")
+          .select("id, first_name, last_name, email, phone")
+          .in("id", uniqueCustomerIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+    uniqueLocationIds.length > 0
+      ? supabase.from("locations").select("id, name").in("id", uniqueLocationIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+  ]);
+
+  if (customersRes.error) {
+    return { rows: [], total: 0, error: new Error(customersRes.error.message) };
+  }
+  if (locationsRes.error) {
+    return { rows: [], total: 0, error: new Error(locationsRes.error.message) };
+  }
+
+  const customersById = new Map<
+    string,
+    { id: string; first_name: string; last_name: string; email: string; phone: string | null }
+  >();
+  for (const row of customersRes.data ?? []) {
+    const c = row as {
+      id: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+      phone: string | null;
+    };
+    customersById.set(c.id, c);
+  }
+
+  const locationsById = new Map<string, { name: string }>();
+  for (const row of locationsRes.data ?? []) {
+    const l = row as { id: string; name: string };
+    locationsById.set(l.id, { name: l.name });
   }
 
   return {
-    rows: mapApplicationRows((applications ?? []) as Record<string, unknown>[]),
-    total: count ?? 0,
+    rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
+    total,
     error: null,
   };
 }

@@ -29,10 +29,7 @@ export default async function ApplicationsPage({
     locationsForFilters = locs ?? [];
   }
 
-  const [{ rows, total, error }, loanTypesMeta] = await Promise.all([
-    fetchApplicationsPage(supabase, listQuery),
-    fetchLoanTypeFilterOptions(supabase),
-  ]);
+  const { rows, total, error } = await fetchApplicationsPage(supabase, listQuery);
 
   if (error) {
     await logSupabaseQueryErrorWithRequest("applications_list_query_failed", error, {
@@ -48,6 +45,8 @@ export default async function ApplicationsPage({
       </div>
     );
   }
+
+  const loanTypesMeta = await fetchLoanTypeFilterOptions(supabase);
 
   const totalPages = Math.max(1, Math.ceil(total / listQuery.pageSize));
   if (total > 0 && listQuery.page > totalPages) {
