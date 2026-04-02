@@ -8,7 +8,7 @@ export default async function ApplicationsLayout({
   children: React.ReactNode;
 }) {
   const profile = await getProfile();
-  if (!profile) redirect("/login");
+  if (!profile) redirect("/account/unauthorized");
 
   return (
     <div className="min-h-screen flex flex-col bg-muted/30">

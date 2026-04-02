@@ -42,7 +42,6 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isAuthRoute = request.nextUrl.pathname.startsWith("/login");
   const isDashboard =
     request.nextUrl.pathname.startsWith("/applications") ||
     request.nextUrl.pathname.startsWith("/admin");
@@ -54,11 +53,10 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/applications";
-    return NextResponse.redirect(url);
-  }
+  // Do not redirect signed-in users away from /login here. The login page decides between
+  // /applications and /account/unauthorized; sending every session to /applications caused a loop
+  // when auth existed but public.profiles had no row (middleware saw a user, layout redirected to
+  // /login, middleware sent them back to /applications).
 
   return supabaseResponse;
 }

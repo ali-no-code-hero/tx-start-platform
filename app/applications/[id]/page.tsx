@@ -20,7 +20,7 @@ export default async function ApplicationDetailPage({
 }) {
   const { id } = await params;
   const profile = await getProfile();
-  if (!profile) redirect("/login");
+  if (!profile) redirect("/account/unauthorized");
 
   const supabase = await createClient();
 

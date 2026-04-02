@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 export default async function ApplicationsPage() {
   const profile = await getProfile();
-  if (!profile) redirect("/login");
+  if (!profile) redirect("/account/unauthorized");
 
   const supabase = await createClient();
   const { data: applications, error } = await supabase
