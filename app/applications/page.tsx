@@ -41,7 +41,9 @@ export default async function ApplicationsPage({
     });
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
-        Failed to load applications: {error.message}
+        Failed to load applications:{" "}
+        {[error.message, error.details, error.code].filter(Boolean).join(" — ") ||
+          "Something went wrong loading this list."}
       </div>
     );
   }

@@ -5,7 +5,7 @@ import { APPLICATION_STATUSES, type ApplicationStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 type LocationOption = { id: string; name: string };
@@ -14,6 +14,10 @@ type Props = {
   locations: LocationOption[];
   loanTypeOptions: string[];
   initial: AnalyticsUrlState;
+  /** Wrapped in startTransition by parent so navigation shows pending UI. */
+  navigate: (href: string) => void;
+  /** True while a filter navigation is in progress — lock inputs and show applying state. */
+  isApplying: boolean;
 };
 
 function toggleList<T>(list: T[], item: T, eq: (a: T, b: T) => boolean): T[] {
@@ -22,8 +26,13 @@ function toggleList<T>(list: T[], item: T, eq: (a: T, b: T) => boolean): T[] {
   return [...list, item];
 }
 
-export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props) {
-  const router = useRouter();
+export function AnalyticsFilters({
+  locations,
+  loanTypeOptions,
+  initial,
+  navigate,
+  isApplying,
+}: Props) {
   const [from, setFrom] = useState(initial.rangeStart);
   const [to, setTo] = useState(initial.rangeEnd);
   const [locIds, setLocIds] = useState<string[]>(initial.locationIds);
@@ -52,6 +61,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
   }
 
   function applyToUrl() {
+    if (isApplying) return;
     const q = new URLSearchParams();
     q.set("from", from);
     q.set("to", to);
@@ -60,10 +70,11 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
     for (const s of statuses) q.append("status", s);
     for (const lt of loanTypes) q.append("loan_type", lt);
     if (urgent !== "all") q.set("urgent", urgent);
-    router.push(`/admin/analytics?${q.toString()}`);
+    navigate(`/admin/analytics?${q.toString()}`);
   }
 
   function clearFilters() {
+    if (isApplying) return;
     const defEnd = new Date();
     const defStart = new Date();
     defStart.setMonth(defStart.getMonth() - 12);
@@ -74,8 +85,10 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
     setStatuses([]);
     setLoanTypes([]);
     setUrgent("all");
-    router.push("/admin/analytics");
+    navigate("/admin/analytics");
   }
+
+  const locked = isApplying;
 
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">
@@ -86,8 +99,9 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
             id="analytics-from"
             type="date"
             value={from}
+            disabled={locked}
             onChange={(e) => setFrom(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           />
         </div>
         <div className="grid gap-1.5">
@@ -96,8 +110,9 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
             id="analytics-to"
             type="date"
             value={to}
+            disabled={locked}
             onChange={(e) => setTo(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           />
         </div>
         <div className="flex flex-wrap gap-1">
@@ -107,6 +122,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
               type="button"
               variant="outline"
               size="sm"
+              disabled={locked}
               onClick={() =>
                 "days" in p ? applyPreset(p.days) : applyPreset(undefined, p.months)
               }
@@ -132,6 +148,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
               type="button"
               size="sm"
               variant={urgent === v ? "default" : "outline"}
+              disabled={locked}
               onClick={() => setUrgent(v)}
             >
               {label}
@@ -147,6 +164,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
             type="button"
             size="sm"
             variant={unassigned ? "default" : "outline"}
+            disabled={locked}
             onClick={() => setUnassigned((u) => !u)}
           >
             Unassigned
@@ -159,6 +177,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
                 type="button"
                 size="sm"
                 variant={on ? "default" : "outline"}
+                disabled={locked}
                 onClick={() =>
                   setLocIds((prev) => toggleList(prev, loc.id, (a, b) => a === b))
                 }
@@ -182,6 +201,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
                 size="sm"
                 variant={on ? "default" : "outline"}
                 className={cn(on && "font-medium")}
+                disabled={locked}
                 onClick={() =>
                   setStatuses((prev) => toggleList(prev, s, (a, b) => a === b))
                 }
@@ -201,6 +221,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
               type="button"
               size="sm"
               variant={loanTypes.includes("Unknown") ? "default" : "outline"}
+              disabled={locked}
               onClick={() =>
                 setLoanTypes((prev) => toggleList(prev, "Unknown", (a, b) => a === b))
               }
@@ -215,6 +236,7 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
                   type="button"
                   size="sm"
                   variant={on ? "default" : "outline"}
+                  disabled={locked}
                   onClick={() =>
                     setLoanTypes((prev) => toggleList(prev, lt, (a, b) => a === b))
                   }
@@ -228,10 +250,28 @@ export function AnalyticsFilters({ locations, loanTypeOptions, initial }: Props)
       ) : null}
 
       <div className="flex flex-wrap gap-2 pt-1">
-        <Button type="button" onClick={() => applyToUrl()}>
-          Apply filters
+        <Button
+          type="button"
+          disabled={locked}
+          aria-busy={isApplying}
+          onClick={() => applyToUrl()}
+          className="min-w-[9.5rem]"
+        >
+          {isApplying ? (
+            <>
+              <Loader2 className="animate-spin" aria-hidden />
+              Applying…
+            </>
+          ) : (
+            "Apply filters"
+          )}
         </Button>
-        <Button type="button" variant="outline" onClick={() => clearFilters()}>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={locked}
+          onClick={() => clearFilters()}
+        >
           Reset
         </Button>
       </div>

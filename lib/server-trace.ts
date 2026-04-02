@@ -3,10 +3,23 @@ import { headers } from "next/headers";
 /** PostgREST / Supabase client error shape (subset we log). */
 export type PostgrestLikeError = {
   message: string;
-  code?: string;
-  details?: string;
-  hint?: string;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
 };
+
+function normalizePostgrestLogFields(err: PostgrestLikeError): PostgrestLikeError {
+  const msg = (err.message ?? "").trim();
+  if (msg) return { ...err, message: msg };
+  const fallback = [err.code, err.details, err.hint]
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter(Boolean)
+    .join(" — ");
+  return {
+    ...err,
+    message: fallback || "(empty error message; likely non-JSON or empty upstream body)",
+  };
+}
 
 export type VercelRequestTrace = {
   vercelId?: string;
@@ -41,14 +54,15 @@ export function logSupabaseQueryError(
   err: PostgrestLikeError,
   ctx: Record<string, unknown> = {},
 ): void {
+  const n = normalizePostgrestLogFields(err);
   const payload = {
     source: "tx-star-crm",
     event,
     supabase: {
-      message: err.message,
-      code: err.code ?? null,
-      details: err.details ?? null,
-      hint: err.hint ?? null,
+      message: n.message,
+      code: n.code ?? null,
+      details: n.details ?? null,
+      hint: n.hint ?? null,
     },
     ctx,
     deploy: getVercelDeployMeta(),

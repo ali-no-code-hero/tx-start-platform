@@ -1,11 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import type { PostgrestLikeError } from "@/lib/server-trace";
 import type { ApplicationRow, ApplicationStatus } from "@/lib/types";
 import { APPLICATION_STATUSES } from "@/lib/types";
 
 export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 25;
 export const APPLICATION_LIST_PAGE_SIZE_MAX = 100;
-const SEARCH_IDS_CAP = 200;
+/** Keeps `.in(uuid,...)` filters within typical reverse-proxy URL limits. */
+const SEARCH_IDS_CAP = 60;
 const LOAN_TYPE_SCAN_LIMIT = 1500;
 
 const MAX_LOAN_FILTERS = 48;
@@ -203,7 +205,7 @@ function applyApplicationListFilters(
 async function resolveSearchCustomerAndLocationIds(
   supabase: SupabaseClient,
   token: string,
-): Promise<{ customerIds: string[]; locationIds: string[]; error: Error | null }> {
+): Promise<{ customerIds: string[]; locationIds: string[]; error: PostgrestLikeError | null }> {
   const ilike = `%${token}%`;
 
   const [custRes, locRes] = await Promise.all([
@@ -218,10 +220,10 @@ async function resolveSearchCustomerAndLocationIds(
   ]);
 
   if (custRes.error) {
-    return { customerIds: [], locationIds: [], error: new Error(custRes.error.message) };
+    return { customerIds: [], locationIds: [], error: custRes.error };
   }
   if (locRes.error) {
-    return { customerIds: [], locationIds: [], error: new Error(locRes.error.message) };
+    return { customerIds: [], locationIds: [], error: locRes.error };
   }
 
   const customerIds = (custRes.data ?? []).map((row) => (row as { id: string }).id);
@@ -257,7 +259,7 @@ export async function fetchLoanTypeFilterOptions(
 export async function fetchApplicationsPage(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
-): Promise<{ rows: ApplicationRow[]; total: number; error: Error | null }> {
+): Promise<{ rows: ApplicationRow[]; total: number; error: PostgrestLikeError | null }> {
   const { page, pageSize, q } = params;
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
@@ -289,10 +291,13 @@ export async function fetchApplicationsPage(
 
   if (token.length > 0) {
     const ilike = `%${token}%`;
-    const orParts: string[] = [
-      `type_of_loan.ilike.${ilike}`,
-      `status.ilike.${ilike}`,
-    ];
+    const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
+    const statusMatches = APPLICATION_STATUSES.filter((s) =>
+      s.toLowerCase().includes(token.toLowerCase()),
+    );
+    if (statusMatches.length > 0) {
+      orParts.push(`status.in.(${statusMatches.join(",")})`);
+    }
     if (customerIdsForSearch.length > 0) {
       orParts.push(`customer_id.in.(${customerIdsForSearch.join(",")})`);
     }
@@ -310,10 +315,10 @@ export async function fetchApplicationsPage(
   ]);
 
   if (pageRes.error) {
-    return { rows: [], total: 0, error: new Error(pageRes.error.message) };
+    return { rows: [], total: 0, error: pageRes.error };
   }
   if (countRes.error) {
-    return { rows: [], total: 0, error: new Error(countRes.error.message) };
+    return { rows: [], total: 0, error: countRes.error };
   }
 
   const flatRows = (pageRes.data ?? []) as FlatApplicationRow[];
@@ -339,10 +344,10 @@ export async function fetchApplicationsPage(
   ]);
 
   if (customersRes.error) {
-    return { rows: [], total: 0, error: new Error(customersRes.error.message) };
+    return { rows: [], total: 0, error: customersRes.error };
   }
   if (locationsRes.error) {
-    return { rows: [], total: 0, error: new Error(locationsRes.error.message) };
+    return { rows: [], total: 0, error: locationsRes.error };
   }
 
   const customersById = new Map<

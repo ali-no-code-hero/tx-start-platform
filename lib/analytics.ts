@@ -117,3 +117,16 @@ export function parseAnalyticsSearchParams(
     urgent,
   };
 }
+
+/** Stable key so filter UI remounts when URL-derived analytics state changes. */
+export function analyticsUrlStateKey(state: AnalyticsUrlState): string {
+  return [
+    state.rangeStart,
+    state.rangeEnd,
+    [...state.locationIds].sort().join(","),
+    state.includeUnassigned ? "1" : "0",
+    [...state.statuses].sort().join(","),
+    [...state.loanTypes].sort().join(","),
+    state.urgent,
+  ].join("|");
+}
