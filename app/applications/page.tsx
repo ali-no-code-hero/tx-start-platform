@@ -1,6 +1,7 @@
 import { ApplicationsTable } from "@/components/applications-table";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
 import { redirect } from "next/navigation";
 
 export default async function ApplicationsPage() {
@@ -25,9 +26,17 @@ export default async function ApplicationsPage() {
       locations ( name )
     `,
     )
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(500);
 
   if (error) {
+    await logSupabaseQueryErrorWithRequest("applications_list_query_failed", error, {
+      route: "/applications",
+      profileRole: profile.role,
+      profileId: profile.id,
+      locationId: profile.location_id,
+      query: "applications_embed_customers_locations_limit_500",
+    });
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
         Failed to load applications: {error.message}
@@ -64,8 +73,8 @@ export default async function ApplicationsPage() {
           {profile.role === "customer"
             ? "Your loan applications and status updates."
             : profile.role === "staff"
-              ? "Showing applications for your assigned location."
-              : "All locations."}
+              ? "Showing applications for your assigned location (up to 500 most recent)."
+              : "All locations (up to 500 most recent)."}
         </p>
       </div>
       <ApplicationsTable

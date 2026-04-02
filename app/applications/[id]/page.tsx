@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { getProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
@@ -36,7 +37,17 @@ export default async function ApplicationDetailPage({
     .eq("id", id)
     .maybeSingle();
 
-  if (appErr || !app) notFound();
+  if (appErr) {
+    await logSupabaseQueryErrorWithRequest("applications_detail_query_failed", appErr, {
+      route: "/applications/[id]",
+      applicationId: id,
+      profileRole: profile.role,
+      profileId: profile.id,
+      query: "applications_by_id_embed_customers_locations",
+    });
+    notFound();
+  }
+  if (!app) notFound();
 
   const customer = app.customers as {
     id: string;
