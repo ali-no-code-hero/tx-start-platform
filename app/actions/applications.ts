@@ -1,6 +1,7 @@
 "use server";
 
 import { getProfile } from "@/lib/auth";
+import { toStoredUsPhone } from "@/lib/phone-format";
 import { createClient } from "@/lib/supabase/server";
 import type { ApplicationStatus } from "@/lib/types";
 import { revalidatePath } from "next/cache";
@@ -62,7 +63,7 @@ export async function updateCustomerFields(input: {
       first_name: input.first_name,
       last_name: input.last_name,
       email: input.email.trim().toLowerCase(),
-      phone: input.phone || null,
+      phone: toStoredUsPhone(input.phone),
     })
     .eq("id", input.customerId);
 

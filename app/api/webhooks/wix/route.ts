@@ -1,3 +1,4 @@
+import { toStoredUsPhone } from "@/lib/phone-format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeWixPayload } from "@/lib/wix/normalize";
 import { NextResponse } from "next/server";
@@ -120,7 +121,7 @@ export async function POST(request: Request) {
         first_name: normalized.firstName,
         last_name: normalized.lastName,
         email: normalized.email,
-        phone: normalized.phone || normalized.phoneDigits || null,
+        phone: toStoredUsPhone(normalized.phone || normalized.phoneDigits),
         wix_contact_id: normalized.wixContactId ?? null,
       })
       .select("id")
@@ -136,7 +137,8 @@ export async function POST(request: Request) {
       first_name: normalized.firstName,
       last_name: normalized.lastName,
     };
-    if (normalized.phone) custUpdate.phone = normalized.phone;
+    const phonePatch = toStoredUsPhone(normalized.phone || normalized.phoneDigits);
+    if (phonePatch) custUpdate.phone = phonePatch;
     if (normalized.wixContactId) custUpdate.wix_contact_id = normalized.wixContactId;
     await admin.from("customers").update(custUpdate).eq("id", customerId);
   }

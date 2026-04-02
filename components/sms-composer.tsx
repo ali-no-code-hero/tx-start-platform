@@ -1,6 +1,7 @@
 "use client";
 
 import { sendCustomerSmsAction } from "@/app/actions/sms";
+import { formatPhoneUs, toStoredUsPhone } from "@/lib/phone-format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +19,7 @@ export function SmsComposer({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [to, setTo] = useState(defaultTo);
+  const [to, setTo] = useState(() => formatPhoneUs(defaultTo) ?? defaultTo);
   const [body, setBody] = useState("");
 
   function send() {
@@ -42,7 +43,20 @@ export function SmsComposer({
     <div className="space-y-3 max-w-xl">
       <div className="space-y-2">
         <Label>To (phone)</Label>
-        <Input value={to} onChange={(e) => setTo(e.target.value)} className="bg-background" />
+        <Input
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          placeholder="(512) 767-3628"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          onBlur={() => {
+            const next = toStoredUsPhone(to);
+            if (next !== null) setTo(next);
+            else if (!to.trim()) setTo("");
+          }}
+          className="bg-background"
+        />
       </div>
       <div className="space-y-2">
         <Label>Message</Label>

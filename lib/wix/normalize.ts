@@ -1,3 +1,4 @@
+import { formatPhoneUs } from "@/lib/phone-format";
 import { z } from "zod";
 
 /** Accepts unknown webhook body; extracts fields via common paths + label map. */
@@ -186,6 +187,10 @@ export function normalizeWixPayload(raw: unknown): NormalizedWixSubmission | nul
   const submittedAt = pickStr(body, ["Submission Time", "submissionTime", "createdAt"]);
 
   const phoneDigits = normalizePhone(phoneRaw);
+  const phone =
+    phoneDigits.length >= 10
+      ? (formatPhoneUs(phoneDigits) ?? (phoneRaw || phoneDigits))
+      : phoneRaw || phoneDigits;
 
   return {
     wixSubmissionId,
@@ -195,7 +200,7 @@ export function normalizeWixPayload(raw: unknown): NormalizedWixSubmission | nul
     firstName: safeFirst,
     lastName: safeLast,
     email: email.toLowerCase(),
-    phone: phoneRaw || phoneDigits,
+    phone,
     phoneDigits,
     loanAmountRequested: loanAmount,
     typeOfLoan,

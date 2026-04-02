@@ -1,33 +1,38 @@
 import { ApplicationsTable } from "@/components/applications-table";
 import { getProfile } from "@/lib/auth";
+import {
+  applicationsListSearchParams,
+  fetchApplicationsPage,
+  fetchLoanTypeFilterOptions,
+  parseApplicationsListQuery,
+} from "@/lib/applications-list";
 import { createClient } from "@/lib/supabase/server";
 import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
 import { redirect } from "next/navigation";
 
-export default async function ApplicationsPage() {
+export default async function ApplicationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const profile = await getProfile();
   if (!profile) redirect("/account/unauthorized");
 
+  const raw = await searchParams;
+  const listQuery = parseApplicationsListQuery(raw);
+
   const supabase = await createClient();
-  const { data: applications, error } = await supabase
-    .from("applications")
-    .select(
-      `
-      id,
-      status,
-      created_at,
-      urgent_same_day,
-      loan_amount_requested,
-      loan_amount_approved,
-      type_of_loan,
-      location_id,
-      submission_metadata,
-      customers ( id, first_name, last_name, email, phone ),
-      locations ( name )
-    `,
-    )
-    .order("created_at", { ascending: false })
-    .limit(500);
+
+  let locationsForFilters: { id: string; name: string }[] = [];
+  if (profile.role !== "customer") {
+    const { data: locs } = await supabase.from("locations").select("id, name").order("name");
+    locationsForFilters = locs ?? [];
+  }
+
+  const [{ rows, total, error }, loanTypesMeta] = await Promise.all([
+    fetchApplicationsPage(supabase, listQuery),
+    fetchLoanTypeFilterOptions(supabase),
+  ]);
 
   if (error) {
     await logSupabaseQueryErrorWithRequest("applications_list_query_failed", error, {
@@ -35,7 +40,7 @@ export default async function ApplicationsPage() {
       profileRole: profile.role,
       profileId: profile.id,
       locationId: profile.location_id,
-      query: "applications_embed_customers_locations_limit_500",
+      query: "applications_paginated_list",
     });
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
@@ -44,26 +49,14 @@ export default async function ApplicationsPage() {
     );
   }
 
-  const rows = (applications ?? []).map((a) => {
-    const cust = a.customers as
-      | { id: string; first_name: string; last_name: string; email: string; phone: string | null }
-      | { id: string; first_name: string; last_name: string; email: string; phone: string | null }[]
-      | null;
-    const loc = a.locations as { name: string } | { name: string }[] | null;
-    return {
-      id: a.id,
-      status: a.status,
-      created_at: a.created_at,
-      urgent_same_day: a.urgent_same_day,
-      loan_amount_requested: a.loan_amount_requested,
-      loan_amount_approved: a.loan_amount_approved,
-      type_of_loan: a.type_of_loan,
-      location_id: a.location_id,
-      submission_metadata: a.submission_metadata as Record<string, unknown> | null,
-      customers: Array.isArray(cust) ? cust[0] ?? null : cust,
-      locations: Array.isArray(loc) ? loc[0] ?? null : loc,
-    };
-  });
+  const totalPages = Math.max(1, Math.ceil(total / listQuery.pageSize));
+  if (total > 0 && listQuery.page > totalPages) {
+    redirect(
+      `/applications?${applicationsListSearchParams({ ...listQuery, page: totalPages }).toString()}`,
+    );
+  }
+
+  const safePage = Math.min(listQuery.page, totalPages);
 
   return (
     <div className="space-y-6">
@@ -73,14 +66,21 @@ export default async function ApplicationsPage() {
           {profile.role === "customer"
             ? "Your loan applications and status updates."
             : profile.role === "staff"
-              ? "Showing applications for your assigned location (up to 500 most recent)."
-              : "All locations (up to 500 most recent)."}
+              ? `Applications for your assigned location (${listQuery.pageSize} per page; filters and search apply across all you can access).`
+              : `All locations (${listQuery.pageSize} per page; filters and search apply across the full dataset).`}
         </p>
       </div>
       <ApplicationsTable
         rows={rows}
+        totalCount={total}
+        page={safePage}
+        pageSize={listQuery.pageSize}
+        queryState={listQuery}
         isAdmin={profile.role === "admin"}
         isCustomer={profile.role === "customer"}
+        locations={locationsForFilters}
+        loanTypeOptions={loanTypesMeta.options}
+        hasUnknownLoanType={loanTypesMeta.hasUnknown}
       />
     </div>
   );

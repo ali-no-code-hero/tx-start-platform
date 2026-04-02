@@ -1,6 +1,7 @@
 import { sendResendCustomerEmail } from "@/lib/email/resend-customer";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { renderTemplate, type TemplateContext } from "@/lib/template-render";
+import { toStoredSmsToPhone } from "@/lib/phone-format";
 import { sendTwilioSms, toE164Us } from "@/lib/sms/twilio-send";
 import type { ApplicationStatus } from "@/lib/types";
 import { NextResponse } from "next/server";
@@ -170,7 +171,7 @@ async function runScheduledMessages(request: Request) {
             sent_by_user_id: null,
             automation_rule_id: rule.id,
             status_entered_at_snapshot: app.status_entered_at,
-            to_phone: e164,
+            to_phone: toStoredSmsToPhone(e164),
             body,
             twilio_sid: twilioSid,
           });

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
-import { toE164Us } from "@/lib/phone-format";
+import { formatPhoneUs, toE164Us } from "@/lib/phone-format";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -218,11 +218,16 @@ export function LoginForm() {
               <Input
                 id="phone"
                 type="tel"
+                inputMode="tel"
                 autoComplete="tel"
                 required
                 value={phoneRaw}
                 onChange={(e) => setPhoneRaw(e.target.value)}
-                placeholder="(903) 555-0100"
+                onBlur={() => {
+                  const f = formatPhoneUs(phoneRaw);
+                  if (f) setPhoneRaw(f);
+                }}
+                placeholder="(512) 767-3628"
                 className="border-zinc-700 bg-zinc-950 text-zinc-50"
               />
               <p className="text-xs text-zinc-500">

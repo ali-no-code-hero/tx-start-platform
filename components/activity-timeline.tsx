@@ -1,3 +1,5 @@
+import { formatPhoneUs } from "@/lib/phone-format";
+
 type CommentRow = {
   id: string;
   content: string;
@@ -113,7 +115,7 @@ export function ActivityTimeline({
               <span className="font-medium text-foreground">SMS · {senderLabel}</span>
               <time dateTime={s.created_at}>{new Date(s.created_at).toLocaleString()}</time>
             </div>
-            <p className="mt-1 text-xs">To {s.to_phone}</p>
+            <p className="mt-1 text-xs">To {formatPhoneUs(s.to_phone) ?? s.to_phone}</p>
             <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{s.body}</p>
           </li>
         );

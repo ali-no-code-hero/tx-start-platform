@@ -1,6 +1,7 @@
 "use server";
 
 import { getProfile } from "@/lib/auth";
+import { toStoredSmsToPhone } from "@/lib/phone-format";
 import { sendTwilioSms, toE164Us } from "@/lib/sms/twilio-send";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -27,7 +28,7 @@ export async function sendCustomerSmsAction(input: {
     sent_by_user_id: profile.id,
     automation_rule_id: null,
     status_entered_at_snapshot: null,
-    to_phone: e164,
+    to_phone: toStoredSmsToPhone(e164),
     body: input.body.trim(),
     twilio_sid: twilioSid,
   });

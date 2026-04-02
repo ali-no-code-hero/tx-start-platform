@@ -1,6 +1,7 @@
 "use client";
 
 import { updateCustomerFields } from "@/app/actions/applications";
+import { formatPhoneUs, toStoredUsPhone } from "@/lib/phone-format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +25,9 @@ export function CustomerEditForm({
   const [first, setFirst] = useState(customer.first_name);
   const [last, setLast] = useState(customer.last_name);
   const [email, setEmail] = useState(customer.email);
-  const [phone, setPhone] = useState(customer.phone ?? "");
+  const [phone, setPhone] = useState(
+    () => formatPhoneUs(customer.phone) ?? customer.phone ?? "",
+  );
 
   function save() {
     startTransition(async () => {
@@ -65,7 +68,20 @@ export function CustomerEditForm({
       </div>
       <div className="space-y-2 sm:col-span-2">
         <Label>Phone</Label>
-        <Input value={phone} onChange={(e) => setPhone(e.target.value)} className="bg-background" />
+        <Input
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          placeholder="(512) 767-3628"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          onBlur={() => {
+            const next = toStoredUsPhone(phone);
+            if (next !== null) setPhone(next);
+            else if (!phone.trim()) setPhone("");
+          }}
+          className="bg-background"
+        />
       </div>
       <div className="sm:col-span-2">
         <Button type="button" onClick={() => void save()} disabled={pending}>

@@ -14,6 +14,26 @@ import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+function embeddedLocation(
+  raw: unknown,
+): { id: string; name: string } | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) {
+    const first = raw[0] as { id?: unknown; name?: unknown } | undefined;
+    if (first?.id != null && first?.name != null) {
+      return { id: String(first.id), name: String(first.name) };
+    }
+    return null;
+  }
+  if (typeof raw === "object") {
+    const o = raw as { id?: unknown; name?: unknown };
+    if (o.id != null && o.name != null) {
+      return { id: String(o.id), name: String(o.name) };
+    }
+  }
+  return null;
+}
+
 export default async function ApplicationDetailPage({
   params,
 }: {
@@ -61,7 +81,7 @@ export default async function ApplicationDetailPage({
   const isCustomer = profile.role === "customer";
   const isStaffSide = profile.role === "staff" || profile.role === "admin";
 
-  const location = app.locations as { id: string; name: string } | null;
+  const location = embeddedLocation(app.locations);
 
   const { data: rawComments } = await supabase
     .from("comments")
@@ -165,6 +185,20 @@ export default async function ApplicationDetailPage({
       ? await supabase.from("locations").select("id, name").order("name")
       : { data: null };
 
+  const locationsForApplicationEdit = (() => {
+    const list = [...(allLocations ?? [])];
+    const ids = new Set(list.map((l) => l.id));
+    if (location && !ids.has(location.id)) {
+      list.push(location);
+      ids.add(location.id);
+    }
+    if (app.location_id && !ids.has(app.location_id)) {
+      list.push({ id: app.location_id, name: "Unknown location" });
+    }
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  })();
+
   const meta = app.submission_metadata as Record<string, unknown> | null;
   const submissionsUrl =
     typeof meta?.submissions_url === "string" ? meta.submissions_url : null;
@@ -260,7 +294,7 @@ export default async function ApplicationDetailPage({
                   status={app.status}
                   loan_amount_approved={app.loan_amount_approved}
                   locationId={app.location_id}
-                  locations={allLocations ?? []}
+                  locations={locationsForApplicationEdit}
                   isAdmin={profile.role === "admin"}
                 />
               </>

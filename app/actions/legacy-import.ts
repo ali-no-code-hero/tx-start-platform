@@ -2,6 +2,7 @@
 
 import { getProfile } from "@/lib/auth";
 import { parseLegacyLoanExportCsv } from "@/lib/legacy-loan-csv";
+import { toStoredUsPhone } from "@/lib/phone-format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
 
@@ -98,7 +99,7 @@ export async function importLegacyLoanCsv(csvText: string): Promise<LegacyImport
           first_name: row.firstName,
           last_name: row.lastName,
           email: row.email,
-          phone: row.phone,
+          phone: toStoredUsPhone(row.phone),
         })
         .select("id")
         .single();

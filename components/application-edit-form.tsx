@@ -96,7 +96,13 @@ export function ApplicationEditForm({
             onValueChange={(v) => setLoc(!v || v === "__none__" ? "" : v)}
           >
             <SelectTrigger className="bg-background">
-              <SelectValue placeholder="Assign location" />
+              <SelectValue placeholder="Assign location">
+                {(value) => {
+                  if (value == null || value === "__none__") return "Unassigned";
+                  const hit = locations.find((l) => l.id === value);
+                  return hit?.name ?? "Unknown location";
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">Unassigned</SelectItem>
