@@ -55,7 +55,7 @@ export default async function ApplicationsPage({
       logContext
         ? {
             ...logContext,
-            listFetchMode: "single_rest_select_with_exact_count",
+            listFetchMode: "single_rest_select_with_estimated_count",
           }
         : null,
     );

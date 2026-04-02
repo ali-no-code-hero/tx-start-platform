@@ -8,7 +8,7 @@ import {
 import type { ApplicationRow, ApplicationStatus } from "@/lib/types";
 import { APPLICATION_STATUSES } from "@/lib/types";
 
-export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 25;
+export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 50;
 export const APPLICATION_LIST_PAGE_SIZE_MAX = 100;
 /** Keeps `.in(uuid,...)` filters within typical reverse-proxy URL limits. */
 const SEARCH_IDS_CAP = 60;
@@ -353,9 +353,11 @@ export async function fetchApplicationsPage(
       searchLocationIds = resolved.locationIds;
     }
 
+    // "exact" count runs COUNT(*) over the full filtered set and hits statement_timeout on large
+    // tables (admin, no filters). "estimated" uses exact when cheap, planner stats when large.
     let dataQuery = supabase
       .from("applications")
-      .select(APPLICATION_FLAT_SELECT, { count: "exact" })
+      .select(APPLICATION_FLAT_SELECT, { count: "estimated" })
       .order("created_at", { ascending: false });
 
     dataQuery = applyApplicationListFilters(dataQuery, params);
