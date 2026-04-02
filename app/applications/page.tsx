@@ -26,13 +26,18 @@ export default async function ApplicationsPage({
 
   const supabase = await createClient();
 
-  let locationsForFilters: { id: string; name: string }[] = [];
-  if (profile.role !== "customer") {
-    const { data: locs } = await supabase.from("locations").select("id, name").order("name");
-    locationsForFilters = locs ?? [];
-  }
+  const [locsResult, searchPrep] = await Promise.all([
+    profile.role === "customer"
+      ? Promise.resolve({
+          data: [] as { id: string; name: string }[],
+          error: null,
+        })
+      : supabase.from("locations").select("id, name").order("name"),
+    resolveApplicationsListSearch(supabase, listQuery),
+  ]);
 
-  const searchPrep = await resolveApplicationsListSearch(supabase, listQuery);
+  const locationsForFilters =
+    profile.role === "customer" ? [] : (locsResult.data ?? []);
   if (!searchPrep.ok) {
     const { error, logContext } = searchPrep.failure;
     await logSupabaseQueryErrorWithRequest(
@@ -68,9 +73,10 @@ export default async function ApplicationsPage({
     );
   }
 
-  const [listResult, matchingTotalCount] = await Promise.all([
+  const [listResult, matchingTotalCount, loanTypesMeta] = await Promise.all([
     fetchApplicationsPage(supabase, listQuery, searchPrep.resolved),
     fetchApplicationsMatchingCount(supabase, listQuery, searchPrep.resolved),
+    fetchLoanTypeFilterOptions(supabase),
   ]);
 
   const { rows, total, hasNextPage, error, logContext } = listResult;
@@ -112,8 +118,6 @@ export default async function ApplicationsPage({
     );
   }
 
-  const loanTypesMeta = await fetchLoanTypeFilterOptions(supabase);
-
   if (rows.length === 0 && listQuery.page > 1) {
     redirect(
       `/applications?${applicationsListSearchParams({ ...listQuery, page: 1 }).toString()}`,
@@ -142,22 +146,32 @@ export default async function ApplicationsPage({
               ? `Applications for your assigned location (${listQuery.pageSize} per page; filters and search apply across all you can access).`
               : `All locations (${listQuery.pageSize} per page; filters and search apply across the full dataset).`}
         </p>
-        {matchingTotalCount != null ? (
-          <p className="mt-2 text-sm tabular-nums text-muted-foreground">
-            <span className="font-semibold text-foreground">
-              {matchingTotalCount.toLocaleString()}
-            </span>{" "}
-            application{matchingTotalCount !== 1 ? "s" : ""}
-            {applicationsListHasActiveFilters(listQuery)
-              ? " match these filters"
-              : profile.role === "admin"
-                ? " in the system"
-                : profile.role === "staff"
-                  ? " you can access"
-                  : ""}
-            .
-          </p>
-        ) : null}
+        <p className="mt-2 text-sm tabular-nums text-muted-foreground">
+          {matchingTotalCount != null ? (
+            <>
+              <span className="font-semibold text-foreground">
+                {matchingTotalCount.toLocaleString()}
+              </span>{" "}
+              application{matchingTotalCount !== 1 ? "s" : ""}
+              {applicationsListHasActiveFilters(listQuery)
+                ? " match these filters"
+                : profile.role === "admin"
+                  ? " in the system"
+                  : profile.role === "staff"
+                    ? " you can access"
+                    : ""}
+              <span className="font-normal"> (planner estimate)</span>.
+            </>
+          ) : (
+            <>
+              Total count is unavailable right now
+              {profile.role === "admin" && !applicationsListHasActiveFilters(listQuery)
+                ? " — all applications still load below"
+                : ""}
+              .
+            </>
+          )}
+        </p>
       </div>
       <ApplicationsTable
         rows={rows}

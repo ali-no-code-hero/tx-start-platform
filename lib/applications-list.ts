@@ -12,12 +12,10 @@ export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 50;
 export const APPLICATION_LIST_PAGE_SIZE_MAX = 100;
 /** Keeps `.in(uuid,...)` filters within typical reverse-proxy URL limits. */
 const SEARCH_IDS_CAP = 60;
-const LOAN_TYPE_SCAN_LIMIT = 1500;
-
 const MAX_LOAN_FILTERS = 48;
 const MAX_LOC_FILTERS = 64;
 
-/** Flat select — no embedded resources (avoids expensive PostgREST joins + RLS per nested row). */
+/** Flat select — no embedded resources; only list UI fields (avoids wide jsonb on every row). */
 const APPLICATION_FLAT_SELECT = `
   id,
   customer_id,
@@ -28,7 +26,7 @@ const APPLICATION_FLAT_SELECT = `
   loan_amount_approved,
   type_of_loan,
   location_id,
-  submission_metadata
+  needs_location_review:submission_metadata->needs_location_review
 `;
 
 const UUID_RE =
@@ -176,8 +174,18 @@ type FlatApplicationRow = {
   loan_amount_approved: number | null;
   type_of_loan: string | null;
   location_id: string | null;
-  submission_metadata: Record<string, unknown> | null;
+  /** From `submission_metadata->needs_location_review` (boolean, string, or null). */
+  needs_location_review: unknown;
 };
+
+function parseNeedsLocationReviewFlag(raw: unknown): boolean {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") {
+    const s = raw.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes";
+  }
+  return Boolean(raw);
+}
 
 function mapFlatToApplicationRows(
   apps: FlatApplicationRow[],
@@ -196,7 +204,10 @@ function mapFlatToApplicationRows(
     loan_amount_approved: a.loan_amount_approved,
     type_of_loan: a.type_of_loan,
     location_id: a.location_id,
-    submission_metadata: a.submission_metadata,
+    submission_metadata:
+      a.needs_location_review == null
+        ? null
+        : { needs_location_review: parseNeedsLocationReviewFlag(a.needs_location_review) },
     customers: customersById.get(a.customer_id) ?? null,
     locations: a.location_id ? locationsById.get(a.location_id) ?? null : null,
   }));
@@ -366,8 +377,8 @@ function applyApplicationsListSearchOr(
 }
 
 /**
- * Total rows matching current filters + search (RLS-scoped). Separate HEAD request with
- * estimated count so the paginated list stays fast; may be approximate on very large tables.
+ * Total rows matching current filters + search (RLS-scoped). Separate HEAD request using
+ * planner statistics (`planned`) — fast and stable for large tables; can differ slightly from exact COUNT.
  */
 export async function fetchApplicationsMatchingCount(
   supabase: SupabaseClient,
@@ -375,7 +386,7 @@ export async function fetchApplicationsMatchingCount(
   resolved: ApplicationsListSearchResolved,
 ): Promise<number | null> {
   try {
-    let q = supabase.from("applications").select("id", { count: "estimated", head: true });
+    let q = supabase.from("applications").select("id", { count: "planned", head: true });
     q = applyApplicationListFilters(q, params);
     q = applyApplicationsListSearchOr(q, resolved);
     const { count, error } = await q;
@@ -389,18 +400,32 @@ export async function fetchApplicationsMatchingCount(
 export async function fetchLoanTypeFilterOptions(
   supabase: SupabaseClient,
 ): Promise<{ options: string[]; hasUnknown: boolean }> {
-  const { data, error } = await supabase
+  const { data, error } = await supabase.rpc("applications_distinct_loan_type_options");
+
+  if (!error && data != null && typeof data === "object" && !Array.isArray(data)) {
+    const o = data as { types?: unknown; has_unknown?: unknown };
+    const rawTypes = o.types;
+    const options = Array.isArray(rawTypes)
+      ? rawTypes.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+      : [];
+    return {
+      options: [...new Set(options.map((t) => t.trim()))].sort((a, b) => a.localeCompare(b)),
+      hasUnknown: Boolean(o.has_unknown),
+    };
+  }
+
+  const { data: rows, error: fallbackError } = await supabase
     .from("applications")
     .select("type_of_loan")
-    .limit(LOAN_TYPE_SCAN_LIMIT);
+    .limit(500);
 
-  if (error || !data) {
+  if (fallbackError || !rows) {
     return { options: [], hasUnknown: false };
   }
 
   const set = new Set<string>();
   let hasUnknown = false;
-  for (const row of data) {
+  for (const row of rows) {
     const t = (row as { type_of_loan: string | null }).type_of_loan?.trim() ?? "";
     if (t) set.add(t);
     else hasUnknown = true;
