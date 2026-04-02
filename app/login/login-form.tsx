@@ -17,6 +17,18 @@ function safeNext(next: string | null): string {
   return next;
 }
 
+function authSendErrorMessage(
+  message: string,
+  channel: "email" | "phone",
+): string {
+  const m = message.toLowerCase();
+  if (!m.includes("rate limit")) return message;
+  if (channel === "email") {
+    return "Too many sign-in emails were sent. Wait a few minutes, then try again—or use phone if it’s enabled. In Supabase: use custom SMTP (e.g. Resend) and check Authentication → Rate Limits.";
+  }
+  return "Too many SMS codes were sent. Wait a few minutes, then try again—or use email if it’s enabled. Check Authentication → Rate Limits in Supabase.";
+}
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -65,7 +77,7 @@ export function LoginForm() {
           },
         });
         if (error) {
-          toast.error(error.message);
+          toast.error(authSendErrorMessage(error.message, "email"));
           setLoading(false);
           return;
         }
@@ -84,7 +96,7 @@ export function LoginForm() {
           options: { shouldCreateUser: false },
         });
         if (error) {
-          toast.error(error.message);
+          toast.error(authSendErrorMessage(error.message, "phone"));
           setLoading(false);
           return;
         }
