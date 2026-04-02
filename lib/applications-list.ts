@@ -414,26 +414,8 @@ export async function fetchLoanTypeFilterOptions(
     };
   }
 
-  const { data: rows, error: fallbackError } = await supabase
-    .from("applications")
-    .select("type_of_loan")
-    .limit(500);
-
-  if (fallbackError || !rows) {
-    return { options: [], hasUnknown: false };
-  }
-
-  const set = new Set<string>();
-  let hasUnknown = false;
-  for (const row of rows) {
-    const t = (row as { type_of_loan: string | null }).type_of_loan?.trim() ?? "";
-    if (t) set.add(t);
-    else hasUnknown = true;
-  }
-  return {
-    options: [...set].sort((a, b) => a.localeCompare(b)),
-    hasUnknown,
-  };
+  // No table scan fallback: it matched multi-second PostgREST plans under RLS. Fix RPC / migration instead.
+  return { options: [], hasUnknown: false };
 }
 
 export type ApplicationsListFetchResult = {

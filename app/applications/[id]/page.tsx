@@ -14,26 +14,6 @@ import { logSupabaseQueryErrorWithRequest } from "@/lib/server-trace";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
-function embeddedLocation(
-  raw: unknown,
-): { id: string; name: string } | null {
-  if (raw == null) return null;
-  if (Array.isArray(raw)) {
-    const first = raw[0] as { id?: unknown; name?: unknown } | undefined;
-    if (first?.id != null && first?.name != null) {
-      return { id: String(first.id), name: String(first.name) };
-    }
-    return null;
-  }
-  if (typeof raw === "object") {
-    const o = raw as { id?: unknown; name?: unknown };
-    if (o.id != null && o.name != null) {
-      return { id: String(o.id), name: String(o.name) };
-    }
-  }
-  return null;
-}
-
 export default async function ApplicationDetailPage({
   params,
 }: {
@@ -48,11 +28,7 @@ export default async function ApplicationDetailPage({
   const { data: app, error: appErr } = await supabase
     .from("applications")
     .select(
-      `
-      *,
-      customers (*),
-      locations ( id, name )
-    `,
+      "id, customer_id, status, created_at, type_of_loan, loan_amount_requested, loan_amount_approved, urgent_same_day, terms_agreed, wix_submission_id, location_id, submission_metadata",
     )
     .eq("id", id)
     .maybeSingle();
@@ -63,13 +39,80 @@ export default async function ApplicationDetailPage({
       applicationId: id,
       profileRole: profile.role,
       profileId: profile.id,
-      query: "applications_by_id_embed_customers_locations",
+      query: "applications_by_id_flat",
     });
     notFound();
   }
   if (!app) notFound();
 
-  const customer = app.customers as {
+  const isCustomer = profile.role === "customer";
+  const isStaffSide = profile.role === "staff" || profile.role === "admin";
+
+  const [
+    custRes,
+    locRes,
+    commentsRes,
+    emailsRes,
+    smsRes,
+  ] = await Promise.all([
+    supabase
+      .from("customers")
+      .select("id, first_name, last_name, email, phone, auth_user_id")
+      .eq("id", app.customer_id)
+      .maybeSingle(),
+    app.location_id
+      ? supabase.from("locations").select("id, name").eq("id", app.location_id).maybeSingle()
+      : Promise.resolve({
+          data: null as { id: string; name: string } | null,
+          error: null,
+        }),
+    supabase
+      .from("comments")
+      .select("id, content, mentions, created_at, user_id")
+      .eq("application_id", id)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("application_emails")
+      .select(
+        "id, to_email, subject, body, created_at, sent_by_user_id, automation_rule_id",
+      )
+      .eq("application_id", id)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("application_sms")
+      .select("id, to_phone, body, created_at, sent_by_user_id, automation_rule_id")
+      .eq("application_id", id)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (custRes.error) {
+    await logSupabaseQueryErrorWithRequest(
+      "applications_detail_customer_failed",
+      custRes.error,
+      {
+        route: "/applications/[id]",
+        applicationId: id,
+        profileRole: profile.role,
+        profileId: profile.id,
+        query: "customers_by_id",
+      },
+    );
+  }
+  if (locRes.error && app.location_id) {
+    await logSupabaseQueryErrorWithRequest(
+      "applications_detail_location_failed",
+      locRes.error,
+      {
+        route: "/applications/[id]",
+        applicationId: id,
+        profileRole: profile.role,
+        profileId: profile.id,
+        query: "locations_by_id",
+      },
+    );
+  }
+
+  const customer = (custRes.data ?? null) as {
     id: string;
     first_name: string;
     last_name: string;
@@ -78,30 +121,11 @@ export default async function ApplicationDetailPage({
     auth_user_id: string | null;
   } | null;
 
-  const isCustomer = profile.role === "customer";
-  const isStaffSide = profile.role === "staff" || profile.role === "admin";
+  const location = (locRes.data ?? null) as { id: string; name: string } | null;
 
-  const location = embeddedLocation(app.locations);
-
-  const { data: rawComments } = await supabase
-    .from("comments")
-    .select("id, content, mentions, created_at, user_id")
-    .eq("application_id", id)
-    .order("created_at", { ascending: true });
-
-  const { data: rawEmails } = await supabase
-    .from("application_emails")
-    .select(
-      "id, to_email, subject, body, created_at, sent_by_user_id, automation_rule_id",
-    )
-    .eq("application_id", id)
-    .order("created_at", { ascending: true });
-
-  const { data: rawSms } = await supabase
-    .from("application_sms")
-    .select("id, to_phone, body, created_at, sent_by_user_id, automation_rule_id")
-    .eq("application_id", id)
-    .order("created_at", { ascending: true });
+  const rawComments = commentsRes.data;
+  const rawEmails = emailsRes.data;
+  const rawSms = smsRes.data;
 
   const authorIds = [
     ...new Set([

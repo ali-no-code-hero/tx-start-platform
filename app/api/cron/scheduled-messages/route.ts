@@ -32,19 +32,12 @@ type CustomerRow = {
   phone: string | null;
 };
 
-type AppWithCustomer = {
+type AppRow = {
   id: string;
   status: ApplicationStatus;
   status_entered_at: string;
-  customers: CustomerRow | CustomerRow[] | null;
+  customer_id: string;
 };
-
-function singleCustomer(
-  c: AppWithCustomer["customers"],
-): CustomerRow | null {
-  if (c == null) return null;
-  return Array.isArray(c) ? (c[0] ?? null) : c;
-}
 
 function delayElapsed(statusEnteredAt: string, delayMinutes: number): boolean {
   const entered = new Date(statusEnteredAt).getTime();
@@ -88,14 +81,7 @@ async function runScheduledMessages(request: Request) {
   for (const rule of activeRules) {
     const { data: apps, error: appsErr } = await admin
       .from("applications")
-      .select(
-        `
-        id,
-        status,
-        status_entered_at,
-        customers ( id, first_name, last_name, email, phone )
-      `,
-      )
+      .select("id, status, status_entered_at, customer_id")
       .eq("status", rule.application_status);
 
     if (appsErr) {
@@ -104,7 +90,25 @@ async function runScheduledMessages(request: Request) {
       continue;
     }
 
-    const list = (apps ?? []) as unknown as AppWithCustomer[];
+    const list = (apps ?? []) as AppRow[];
+    const customerIds = [...new Set(list.map((a) => a.customer_id))];
+    const { data: customerRows, error: custErr } =
+      customerIds.length > 0
+        ? await admin
+            .from("customers")
+            .select("id, first_name, last_name, email, phone")
+            .in("id", customerIds)
+        : { data: [] as CustomerRow[], error: null };
+
+    if (custErr) {
+      console.error(custErr);
+      errors += 1;
+      continue;
+    }
+
+    const customerById = new Map<string, CustomerRow>(
+      (customerRows ?? []).map((c) => [c.id, c as CustomerRow]),
+    );
 
     for (const app of list) {
       if (!delayElapsed(app.status_entered_at, rule.delay_minutes)) {
@@ -112,7 +116,7 @@ async function runScheduledMessages(request: Request) {
         continue;
       }
 
-      const customer = singleCustomer(app.customers);
+      const customer = customerById.get(app.customer_id);
       if (!customer) {
         skipped += 1;
         continue;
