@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Texas Star Loan CRM
 
-## Getting Started
+Next.js 16 app for **Texas Star Cash & Title Loans**: Wix form submissions, staff workflows, optional **customer portal**, SMS (Twilio), email (Resend), and status-based automation (Vercel cron).
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Framework**: Next.js (App Router), React 19, TypeScript
+- **Auth & data**: Supabase (Postgres + RLS + Auth)
+- **Deploy**: Vercel (`vercel.json` defines a cron for scheduled messages)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. **Install**
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   ```bash
+   npm install
+   ```
 
-## Learn More
+2. **Supabase**
 
-To learn more about Next.js, take a look at the following resources:
+   - Create a project and run migrations in `supabase/migrations/` (in order).
+   - Copy URL and keys into `.env.local` (see below).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+3. **Environment variables**
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   Create `.env.local`:
 
-## Deploy on Vercel
+   | Variable | Purpose |
+   |----------|---------|
+   | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon (public) key |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Service role (server only — webhooks, admin client, cron) |
+   | `WIX_WEBHOOK_SECRET` | Shared secret for `POST /api/webhooks/wix` |
+   | `RESEND_API_KEY` | Outbound email |
+   | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | SMS |
+   | `CRON_SECRET` | Bearer token for `GET /api/cron/scheduled-messages` (Vercel Cron sends `Authorization: Bearer …`) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+4. **Dev server**
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   ```bash
+   npm run dev
+   ```
+
+## Customer portal
+
+- Admins invite borrowers from an **application detail** page: **Invite to customer portal**.
+- The invite includes Supabase `user_metadata.customer_id`. On first signup, the trigger links `customers.auth_user_id` to the new user.
+- RLS restricts customers to their own applications, comments timeline, and logged email/SMS. They cannot change application status or use staff email/SMS tools.
+
+## Scripts
+
+- `npm run dev` — development
+- `npm run build` — production build
+- `npm run lint` — ESLint
+
+## CI
+
+GitHub Actions runs `lint` and `build` on push and pull requests (see `.github/workflows/ci.yml`).
