@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
+
 function safeNextPath(next: string | null): string {
   const fallback = "/applications";
   if (!next || !next.startsWith("/") || next.startsWith("//")) return fallback;
@@ -24,9 +26,20 @@ export async function GET(request: NextRequest) {
 
   const response = NextResponse.redirect(redirectTarget);
 
+  const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.redirect(
+      new URL(
+        `/login?error=${encodeURIComponent("Server configuration error. Contact support.")}`,
+        url.origin,
+      ),
+    );
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
