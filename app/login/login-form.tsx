@@ -58,12 +58,10 @@ export function LoginForm() {
           setLoading(false);
           return;
         }
-        const origin = window.location.origin;
         const { error } = await supabase.auth.signInWithOtp({
           email: trimmed,
           options: {
             shouldCreateUser: false,
-            emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
           },
         });
         if (error) {
@@ -73,7 +71,7 @@ export function LoginForm() {
         }
         setEmail(trimmed);
         setStep("verify");
-        toast.success("Check your email for a sign-in code or link.");
+        toast.success("Check your email for your 6-digit sign-in code.");
       } else {
         const e164 = toE164Us(phoneRaw);
         if (!e164) {
@@ -238,7 +236,7 @@ export function LoginForm() {
             />
             <p className="text-xs text-zinc-500">
               {channel === "email"
-                ? "Enter the code from your email, or use the sign-in link we sent instead."
+                ? "Enter the 6-digit code from your email."
                 : "Enter the code from your text message."}
             </p>
           </div>

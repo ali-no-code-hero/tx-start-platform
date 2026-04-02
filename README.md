@@ -43,15 +43,32 @@ Next.js 16 app for **Texas Star Cash & Title Loans**: Wix form submissions, staf
 
 ## Passwordless sign-in (Supabase Auth)
 
-The login page uses **email OTP / magic link** and **SMS OTP**. Only users that already exist in Supabase Auth can sign in (`shouldCreateUser: false`).
+The login page uses **email OTP** (6-digit code) and **SMS OTP**. Only users that already exist in Supabase Auth can sign in (`shouldCreateUser: false`).
 
-**Supabase dashboard**
+**Sign-in email content:** Supabase sends the same “Magic link” template for `signInWithOtp`; that template must include `{{ .Token }}` so users receive a code. This repo’s template lives at `supabase/templates/magic_link.html`. Apply it in either way:
 
-1. **Authentication → Providers → Email** — enable; turn on **email OTP** (or users can still use the **magic link**, which hits `GET /auth/callback` to exchange the code for a session).
+- **Hosted project:** **Authentication → Emails** → **Magic link** — set the subject to something like “Your Texas Star sign-in code” and paste the HTML from `supabase/templates/magic_link.html` into the body.
+- **CLI:** from the repo root, `supabase link` to your project, then `supabase config push` to sync `supabase/config.toml` + that template (requires [Supabase CLI](https://supabase.com/docs/guides/cli)).
+
+**Send all auth emails through Resend (SMTP)**
+
+CRM outbound email already uses `RESEND_API_KEY` in this app. Auth emails (sign-in, invite, reset, etc.) are sent by **Supabase**, which can relay through Resend:
+
+1. In [Resend](https://resend.com): create an API key and verify your sending domain.
+2. In Supabase: **Project Settings → Authentication** (or **Authentication → Emails** depending on dashboard version) → **SMTP settings** — enable custom SMTP and use Resend’s SMTP ([Resend + Supabase guide](https://resend.com/docs/send-with-supabase-smtp)):
+   - **Host:** `smtp.resend.com`
+   - **Port:** `465` (SSL)
+   - **Username:** `resend`
+   - **Password:** your Resend API key
+3. Set **Sender email** and **Sender name** to a verified address (can match `RESEND_FROM_EMAIL` branding).
+
+**Supabase dashboard (URLs and SMS)**
+
+1. **Authentication → Providers → Email** — enable.
 2. **Authentication → Providers → Phone** — enable and attach **Twilio** (or your SMS provider). This is **separate** from the app’s Twilio env vars used for CRM outbound SMS.
-3. **Authentication → URL configuration** — set **Site URL** to your deployed origin (e.g. `https://your-app.vercel.app`). Under **Redirect URLs**, add:
+3. **Authentication → URL configuration** — set **Site URL** to your deployed origin (production example: `https://tx-start-platform.vercel.app`). Under **Redirect URLs**, add:
    - `http://localhost:3000/auth/callback` (local)
-   - `https://your-domain/auth/callback` (production)
+   - `https://tx-start-platform.vercel.app/auth/callback` (production)
 
 **Phone sign-in requirement:** the user’s **Auth** record must include that phone number (verified). CRM `customers.phone` alone does not update Supabase Auth; link or add the phone in Supabase (e.g. after invite, or via Admin API) if borrowers should sign in with SMS.
 

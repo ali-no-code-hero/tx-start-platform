@@ -45,6 +45,9 @@ export function CrmHeader({ role, email }: CrmHeaderProps) {
               >
                 Automation
               </Link>
+              <Link href="/admin/import" className="text-muted-foreground hover:text-foreground">
+                Import
+              </Link>
             </>
           )}
         </nav>

@@ -1,0 +1,9 @@
+# Supabase CLI (https://supabase.com/docs/guides/cli)
+# Email template: sync to your hosted project with `supabase link` then `supabase config push`,
+# or copy `templates/magic_link.html` into Dashboard → Authentication → Emails → Magic link.
+
+project_id = "tx-star-platform"
+
+[auth.email.template.magic_link]
+subject = "Your Texas Star sign-in code"
+content_path = "./templates/magic_link.html"
