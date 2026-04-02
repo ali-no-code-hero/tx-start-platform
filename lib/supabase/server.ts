@@ -31,6 +31,8 @@ export async function createClient() {
           }
         },
       },
+      // Long `.or()` / `.in()` filter strings (e.g. application search); hints only — real limit is upstream.
+      db: { urlLengthLimit: 120_000 },
     },
   );
 }

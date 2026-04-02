@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { PostgrestLikeError } from "@/lib/server-trace";
+import {
+  coercePostgrestLikeError,
+  snapshotUnknownError,
+  type PostgrestLikeError,
+} from "@/lib/server-trace-core";
 import type { ApplicationRow, ApplicationStatus } from "@/lib/types";
 import { APPLICATION_STATUSES } from "@/lib/types";
 
@@ -117,6 +121,49 @@ function escapePostgrestInToken(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+type PostgrestFailureParts = {
+  error: unknown;
+  status: number;
+  statusText: string;
+};
+
+function getPostgrestUrlLength(builder: unknown): number | undefined {
+  if (builder && typeof builder === "object" && "url" in builder) {
+    const u = (builder as { url?: URL }).url;
+    if (u instanceof URL) return u.toString().length;
+  }
+  return undefined;
+}
+
+export type ApplicationsListFetchFailure = {
+  rows: ApplicationRow[];
+  total: number;
+  error: PostgrestLikeError;
+  logContext: Record<string, unknown>;
+};
+
+function buildFailure(
+  step: string,
+  parts: PostgrestFailureParts,
+  requestUrlLength?: number,
+): ApplicationsListFetchFailure {
+  return {
+    rows: [],
+    total: 0,
+    error: coercePostgrestLikeError(parts.error, {
+      status: parts.status,
+      statusText: parts.statusText,
+    }),
+    logContext: {
+      step,
+      httpStatus: parts.status,
+      httpStatusText: parts.statusText,
+      requestUrlLength,
+      errorSnapshot: snapshotUnknownError(parts.error),
+    },
+  };
+}
+
 type FlatApplicationRow = {
   id: string;
   customer_id: string;
@@ -205,30 +252,50 @@ function applyApplicationListFilters(
 async function resolveSearchCustomerAndLocationIds(
   supabase: SupabaseClient,
   token: string,
-): Promise<{ customerIds: string[]; locationIds: string[]; error: PostgrestLikeError | null }> {
+): Promise<
+  | { ok: true; customerIds: string[]; locationIds: string[] }
+  | { ok: false; failure: ApplicationsListFetchFailure }
+> {
   const ilike = `%${token}%`;
 
-  const [custRes, locRes] = await Promise.all([
-    supabase
-      .from("customers")
-      .select("id")
-      .or(
-        `first_name.ilike.${ilike},last_name.ilike.${ilike},email.ilike.${ilike},phone.ilike.${ilike}`,
-      )
-      .limit(SEARCH_IDS_CAP),
-    supabase.from("locations").select("id").ilike("name", ilike).limit(SEARCH_IDS_CAP),
-  ]);
+  const custQuery = supabase
+    .from("customers")
+    .select("id")
+    .or(
+      `first_name.ilike.${ilike},last_name.ilike.${ilike},email.ilike.${ilike},phone.ilike.${ilike}`,
+    )
+    .limit(SEARCH_IDS_CAP);
+  const locQuery = supabase.from("locations").select("id").ilike("name", ilike).limit(SEARCH_IDS_CAP);
+
+  const custUrlLen = getPostgrestUrlLength(custQuery);
+  const locUrlLen = getPostgrestUrlLength(locQuery);
+
+  const [custRes, locRes] = await Promise.all([custQuery, locQuery]);
 
   if (custRes.error) {
-    return { customerIds: [], locationIds: [], error: custRes.error };
+    return {
+      ok: false,
+      failure: buildFailure(
+        "applications_search_customers",
+        { error: custRes.error, status: custRes.status, statusText: custRes.statusText },
+        custUrlLen,
+      ),
+    };
   }
   if (locRes.error) {
-    return { customerIds: [], locationIds: [], error: locRes.error };
+    return {
+      ok: false,
+      failure: buildFailure(
+        "applications_search_locations",
+        { error: locRes.error, status: locRes.status, statusText: locRes.statusText },
+        locUrlLen,
+      ),
+    };
   }
 
   const customerIds = (custRes.data ?? []).map((row) => (row as { id: string }).id);
   const locationIds = (locRes.data ?? []).map((row) => (row as { id: string }).id);
-  return { customerIds, locationIds, error: null };
+  return { ok: true, customerIds, locationIds };
 }
 
 export async function fetchLoanTypeFilterOptions(
@@ -256,126 +323,165 @@ export async function fetchLoanTypeFilterOptions(
   };
 }
 
+export type ApplicationsListFetchResult = {
+  rows: ApplicationRow[];
+  total: number;
+  error: PostgrestLikeError | null;
+  /** Merge into Vercel log `diag` when `error` is set. */
+  logContext?: Record<string, unknown>;
+};
+
 export async function fetchApplicationsPage(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
-): Promise<{ rows: ApplicationRow[]; total: number; error: PostgrestLikeError | null }> {
-  const { page, pageSize, q } = params;
-  const from = (page - 1) * pageSize;
-  const to = from + pageSize - 1;
+): Promise<ApplicationsListFetchResult> {
+  try {
+    const { page, pageSize, q } = params;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
 
-  const token = sanitizeSearchToken(q);
-  let customerIdsForSearch: string[] = [];
-  let searchLocationIds: string[] = [];
+    const token = sanitizeSearchToken(q);
+    let customerIdsForSearch: string[] = [];
+    let searchLocationIds: string[] = [];
 
-  if (token.length > 0) {
-    const resolved = await resolveSearchCustomerAndLocationIds(supabase, token);
-    if (resolved.error) {
-      return { rows: [], total: 0, error: resolved.error };
+    if (token.length > 0) {
+      const resolved = await resolveSearchCustomerAndLocationIds(supabase, token);
+      if (!resolved.ok) {
+        return resolved.failure;
+      }
+      customerIdsForSearch = resolved.customerIds;
+      searchLocationIds = resolved.locationIds;
     }
-    customerIdsForSearch = resolved.customerIds;
-    searchLocationIds = resolved.locationIds;
-  }
 
-  let dataQuery = supabase
-    .from("applications")
-    .select(APPLICATION_FLAT_SELECT)
-    .order("created_at", { ascending: false });
+    let dataQuery = supabase
+      .from("applications")
+      .select(APPLICATION_FLAT_SELECT, { count: "exact" })
+      .order("created_at", { ascending: false });
 
-  let countQuery = supabase
-    .from("applications")
-    .select("id", { count: "exact", head: true });
+    dataQuery = applyApplicationListFilters(dataQuery, params);
 
-  dataQuery = applyApplicationListFilters(dataQuery, params);
-  countQuery = applyApplicationListFilters(countQuery, params);
-
-  if (token.length > 0) {
-    const ilike = `%${token}%`;
-    const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
-    const statusMatches = APPLICATION_STATUSES.filter((s) =>
-      s.toLowerCase().includes(token.toLowerCase()),
-    );
-    if (statusMatches.length > 0) {
-      orParts.push(`status.in.(${statusMatches.join(",")})`);
+    if (token.length > 0) {
+      const ilike = `%${token}%`;
+      const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
+      const statusMatches = APPLICATION_STATUSES.filter((s) =>
+        s.toLowerCase().includes(token.toLowerCase()),
+      );
+      if (statusMatches.length > 0) {
+        orParts.push(`status.in.(${statusMatches.join(",")})`);
+      }
+      if (customerIdsForSearch.length > 0) {
+        orParts.push(`customer_id.in.(${customerIdsForSearch.join(",")})`);
+      }
+      if (searchLocationIds.length > 0) {
+        orParts.push(`location_id.in.(${searchLocationIds.join(",")})`);
+      }
+      const searchOr = orParts.join(",");
+      dataQuery = dataQuery.or(searchOr);
     }
-    if (customerIdsForSearch.length > 0) {
-      orParts.push(`customer_id.in.(${customerIdsForSearch.join(",")})`);
+
+    const pagedQuery = dataQuery.range(from, to);
+    const listUrlLen = getPostgrestUrlLength(pagedQuery);
+    const pageRes = await pagedQuery;
+
+    if (pageRes.error) {
+      return buildFailure(
+        "applications_list_page",
+        { error: pageRes.error, status: pageRes.status, statusText: pageRes.statusText },
+        listUrlLen,
+      );
     }
-    if (searchLocationIds.length > 0) {
-      orParts.push(`location_id.in.(${searchLocationIds.join(",")})`);
+
+    const flatRows = (pageRes.data ?? []) as FlatApplicationRow[];
+    const total = pageRes.count ?? 0;
+
+    const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
+    const uniqueLocationIds = [
+      ...new Set(
+        flatRows.map((r) => r.location_id).filter((id): id is string => id != null && id !== ""),
+      ),
+    ];
+
+    const customersQ =
+      uniqueCustomerIds.length > 0
+        ? supabase
+            .from("customers")
+            .select("id, first_name, last_name, email, phone")
+            .in("id", uniqueCustomerIds)
+        : null;
+    const locationsQ =
+      uniqueLocationIds.length > 0
+        ? supabase.from("locations").select("id, name").in("id", uniqueLocationIds)
+        : null;
+
+    const customersUrlLen = customersQ ? getPostgrestUrlLength(customersQ) : undefined;
+    const locationsUrlLen = locationsQ ? getPostgrestUrlLength(locationsQ) : undefined;
+
+    const [customersRes, locationsRes] = await Promise.all([
+      customersQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
+      locationsQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
+    ]);
+
+    if (customersRes.error) {
+      return buildFailure(
+        "applications_list_customers_batch",
+        {
+          error: customersRes.error,
+          status: customersRes.status,
+          statusText: customersRes.statusText,
+        },
+        customersUrlLen,
+      );
     }
-    const searchOr = orParts.join(",");
-    dataQuery = dataQuery.or(searchOr);
-    countQuery = countQuery.or(searchOr);
-  }
+    if (locationsRes.error) {
+      return buildFailure(
+        "applications_list_locations_batch",
+        {
+          error: locationsRes.error,
+          status: locationsRes.status,
+          statusText: locationsRes.statusText,
+        },
+        locationsUrlLen,
+      );
+    }
 
-  const [pageRes, countRes] = await Promise.all([
-    dataQuery.range(from, to),
-    countQuery,
-  ]);
+    const customersById = new Map<
+      string,
+      { id: string; first_name: string; last_name: string; email: string; phone: string | null }
+    >();
+    for (const row of customersRes.data ?? []) {
+      const c = row as {
+        id: string;
+        first_name: string;
+        last_name: string;
+        email: string;
+        phone: string | null;
+      };
+      customersById.set(c.id, c);
+    }
 
-  if (pageRes.error) {
-    return { rows: [], total: 0, error: pageRes.error };
-  }
-  if (countRes.error) {
-    return { rows: [], total: 0, error: countRes.error };
-  }
+    const locationsById = new Map<string, { name: string }>();
+    for (const row of locationsRes.data ?? []) {
+      const l = row as { id: string; name: string };
+      locationsById.set(l.id, { name: l.name });
+    }
 
-  const flatRows = (pageRes.data ?? []) as FlatApplicationRow[];
-  const total = countRes.count ?? 0;
-
-  const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
-  const uniqueLocationIds = [
-    ...new Set(
-      flatRows.map((r) => r.location_id).filter((id): id is string => id != null && id !== ""),
-    ),
-  ];
-
-  const [customersRes, locationsRes] = await Promise.all([
-    uniqueCustomerIds.length > 0
-      ? supabase
-          .from("customers")
-          .select("id, first_name, last_name, email, phone")
-          .in("id", uniqueCustomerIds)
-      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-    uniqueLocationIds.length > 0
-      ? supabase.from("locations").select("id, name").in("id", uniqueLocationIds)
-      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-  ]);
-
-  if (customersRes.error) {
-    return { rows: [], total: 0, error: customersRes.error };
-  }
-  if (locationsRes.error) {
-    return { rows: [], total: 0, error: locationsRes.error };
-  }
-
-  const customersById = new Map<
-    string,
-    { id: string; first_name: string; last_name: string; email: string; phone: string | null }
-  >();
-  for (const row of customersRes.data ?? []) {
-    const c = row as {
-      id: string;
-      first_name: string;
-      last_name: string;
-      email: string;
-      phone: string | null;
+    return {
+      rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
+      total,
+      error: null,
     };
-    customersById.set(c.id, c);
+  } catch (unexpected) {
+    return {
+      rows: [],
+      total: 0,
+      error: coercePostgrestLikeError(unexpected, { status: 0, statusText: "" }),
+      logContext: {
+        step: "applications_list_unexpected",
+        errorSnapshot: snapshotUnknownError(unexpected),
+        exceptionName: unexpected instanceof Error ? unexpected.name : typeof unexpected,
+      },
+    };
   }
-
-  const locationsById = new Map<string, { name: string }>();
-  for (const row of locationsRes.data ?? []) {
-    const l = row as { id: string; name: string };
-    locationsById.set(l.id, { name: l.name });
-  }
-
-  return {
-    rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
-    total,
-    error: null,
-  };
 }
 
 export function applicationsListSearchParams(state: ApplicationsListQueryState): URLSearchParams {

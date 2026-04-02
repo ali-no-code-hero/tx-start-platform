@@ -29,16 +29,36 @@ export default async function ApplicationsPage({
     locationsForFilters = locs ?? [];
   }
 
-  const { rows, total, error } = await fetchApplicationsPage(supabase, listQuery);
+  const { rows, total, error, logContext } = await fetchApplicationsPage(supabase, listQuery);
 
   if (error) {
-    await logSupabaseQueryErrorWithRequest("applications_list_query_failed", error, {
-      route: "/applications",
-      profileRole: profile.role,
-      profileId: profile.id,
-      locationId: profile.location_id,
-      query: "applications_paginated_list",
-    });
+    await logSupabaseQueryErrorWithRequest(
+      "applications_list_query_failed",
+      error,
+      {
+        route: "/applications",
+        profileRole: profile.role,
+        profileId: profile.id,
+        locationId: profile.location_id,
+        query: "applications_paginated_list",
+        listQuery: {
+          page: listQuery.page,
+          pageSize: listQuery.pageSize,
+          qLen: listQuery.q.length,
+          status: listQuery.status,
+          urgent: listQuery.urgent,
+          locationFilterCount: listQuery.locationIds.length,
+          loanTypeFilterCount: listQuery.loanTypes.length,
+          unassignedOnly: listQuery.unassignedOnly,
+        },
+      },
+      logContext
+        ? {
+            ...logContext,
+            listFetchMode: "single_rest_select_with_exact_count",
+          }
+        : null,
+    );
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
         Failed to load applications:{" "}
