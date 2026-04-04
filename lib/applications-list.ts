@@ -439,6 +439,8 @@ export type ApplicationsListFetchResult = {
   error: PostgrestLikeError | null;
   /** Merge into Vercel log `diag` when `error` is set. */
   logContext?: Record<string, unknown>;
+  /** How the applications rows were loaded (for perf logs). */
+  listDataSource?: "rpc" | "rest";
 };
 
 /** Filled by `fetchApplicationsPage` when passed in `options.timings` (for server-side diagnostics). */
@@ -582,6 +584,7 @@ export async function fetchApplicationsPage(
           hasNextPage: f.hasNextPage,
           error: f.error,
           logContext: { ...f.logContext, listFetchMode: "applications_list_flat_page_rpc" },
+          listDataSource: "rpc",
         };
       }
 
@@ -604,11 +607,19 @@ export async function fetchApplicationsPage(
       }
 
       if (pageRes.error) {
-        return buildFailure(
+        const f = buildFailure(
           "applications_list_page",
           { error: pageRes.error, status: pageRes.status, statusText: pageRes.statusText },
           listUrlLen,
         );
+        return {
+          rows: f.rows,
+          total: f.total,
+          hasNextPage: f.hasNextPage,
+          error: f.error,
+          logContext: { ...f.logContext, listFetchMode: "postgrest_select", listDataSource: "rest" },
+          listDataSource: "rest",
+        };
       }
 
       rawFlat = (pageRes.data ?? []) as FlatApplicationRow[];
@@ -634,7 +645,10 @@ export async function fetchApplicationsPage(
 
     const hydrated = await hydrateFlatApplicationRows(supabase, flatRows, options);
     if (hydrated.error) {
-      return hydrated;
+      return {
+        ...hydrated,
+        listDataSource: resolved.token.length > 0 ? "rpc" : "rest",
+      };
     }
 
     return {
@@ -642,6 +656,7 @@ export async function fetchApplicationsPage(
       total,
       hasNextPage,
       error: null,
+      listDataSource: resolved.token.length > 0 ? "rpc" : "rest",
     };
   } catch (unexpected) {
     return {

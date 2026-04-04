@@ -336,6 +336,7 @@ export function ApplicationsTable({
                     <TableCell>
                       <Link
                         href={`/applications/${r.id}`}
+                        prefetch={false}
                         className="font-medium text-primary hover:underline"
                       >
                         {c ? `${c.first_name} ${c.last_name}` : "—"}

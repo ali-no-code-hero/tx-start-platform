@@ -4,23 +4,24 @@ import {
   type ApplicationsListQueryState,
   type ApplicationsListSearchResolved,
 } from "@/lib/applications-list";
+import type { ServerPhaseTimer } from "@/lib/server-phase-timing";
 import { createClient } from "@/lib/supabase/server";
 import type { UserRole } from "@/lib/types";
 
 export async function ApplicationsMatchingCount({
+  timer,
   profileRole,
   listQuery,
   resolved,
 }: {
+  timer: ServerPhaseTimer;
   profileRole: UserRole;
   listQuery: ApplicationsListQueryState;
   resolved: ApplicationsListSearchResolved;
 }) {
   const supabase = await createClient();
-  const matchingTotalCount = await fetchApplicationsMatchingCount(
-    supabase,
-    listQuery,
-    resolved,
+  const matchingTotalCount = await timer.timeAsync("matching_count_planned", () =>
+    fetchApplicationsMatchingCount(supabase, listQuery, resolved),
   );
 
   return (

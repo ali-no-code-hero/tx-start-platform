@@ -45,6 +45,9 @@ export async function ApplicationsListSection({
     page: listQuery.page,
     pageSize: listQuery.pageSize,
     hasSearch: listQuery.q.trim().length > 0,
+    qUrlLen: listQuery.q.length,
+    searchTokenLen: resolved.token.length,
+    listDataSource: listResult.listDataSource ?? null,
     filterSummary: {
       status: listQuery.status,
       urgent: listQuery.urgent,
@@ -53,6 +56,9 @@ export async function ApplicationsListSection({
       unassignedOnly: listQuery.unassignedOnly,
     },
     listFetchTimings,
+    rowCount: rows.length,
+    hasNextPage,
+    totalApprox: total,
   });
 
   if (error) {

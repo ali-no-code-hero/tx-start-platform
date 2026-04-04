@@ -107,6 +107,7 @@ export default async function ApplicationsPage({
           }
         >
           <ApplicationsMatchingCount
+            timer={timer}
             profileRole={profile.role}
             listQuery={listQuery}
             resolved={searchPrep.resolved}
