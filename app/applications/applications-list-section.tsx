@@ -2,7 +2,6 @@ import { ApplicationsTable } from "@/components/applications-table";
 import {
   applicationsListSearchParams,
   fetchApplicationsPage,
-  fetchLoanTypeFilterOptions,
   type ApplicationsListFetchTimings,
   type ApplicationsListQueryState,
   type ApplicationsListSearchResolved,
@@ -29,20 +28,18 @@ export async function ApplicationsListSection({
   const supabase = await createClient();
   const listFetchTimings: ApplicationsListFetchTimings = {};
 
-  const [listResult, loanTypesMeta] = await Promise.all([
-    timer.timeAsync("applications_list", () =>
-      fetchApplicationsPage(supabase, listQuery, resolved, {
-        timings: listFetchTimings,
-      }),
-    ),
-    timer.timeAsync("loan_type_options_rpc", () => fetchLoanTypeFilterOptions(supabase)),
-  ]);
+  const listResult = await timer.timeAsync("applications_list", () =>
+    fetchApplicationsPage(supabase, listQuery, resolved, {
+      timings: listFetchTimings,
+    }),
+  );
 
   const { rows, total, hasNextPage, error, logContext } = listResult;
 
   timer.finish({
     profileRole: profile.role,
-    page: listQuery.page,
+    listKeysetAfter: listQuery.after != null,
+    listKeysetBefore: listQuery.before != null,
     pageSize: listQuery.pageSize,
     hasSearch: listQuery.q.trim().length > 0,
     qUrlLen: listQuery.q.length,
@@ -72,7 +69,6 @@ export async function ApplicationsListSection({
         locationId: profile.location_id,
         query: "applications_paginated_list",
         listQuery: {
-          page: listQuery.page,
           pageSize: listQuery.pageSize,
           qLen: listQuery.q.length,
           status: listQuery.status,
@@ -80,12 +76,14 @@ export async function ApplicationsListSection({
           locationFilterCount: listQuery.locationIds.length,
           loanTypeFilterCount: listQuery.loanTypes.length,
           unassignedOnly: listQuery.unassignedOnly,
+          listKeysetAfter: listQuery.after != null,
+          listKeysetBefore: listQuery.before != null,
         },
       },
       logContext
         ? {
             ...logContext,
-            listFetchMode: "single_rest_select_no_count_overshoot_one",
+            listFetchMode: "applications_list_flat_page_rpc_keyset",
           }
         : null,
     );
@@ -98,36 +96,26 @@ export async function ApplicationsListSection({
     );
   }
 
-  if (rows.length === 0 && listQuery.page > 1) {
+  if (rows.length === 0 && (listQuery.after != null || listQuery.before != null)) {
     redirect(
-      `/applications?${applicationsListSearchParams({ ...listQuery, page: 1 }).toString()}`,
+      `/applications?${applicationsListSearchParams({ ...listQuery, after: null, before: null }).toString()}`,
     );
   }
 
-  const totalPages =
-    total != null ? Math.max(1, Math.ceil(total / listQuery.pageSize)) : null;
-  if (total != null && total > 0 && totalPages != null && listQuery.page > totalPages) {
-    redirect(
-      `/applications?${applicationsListSearchParams({ ...listQuery, page: totalPages }).toString()}`,
-    );
-  }
-
-  const safePage =
-    totalPages != null ? Math.min(listQuery.page, totalPages) : listQuery.page;
+  const hasPreviousPage = listQuery.after != null || listQuery.before != null;
 
   return (
     <ApplicationsTable
       rows={rows}
       totalCount={total}
       hasNextPage={hasNextPage}
-      page={safePage}
+      hasPreviousPage={hasPreviousPage}
       pageSize={listQuery.pageSize}
       queryState={listQuery}
       isAdmin={profile.role === "admin"}
       isCustomer={profile.role === "customer"}
       locations={locationsForFilters}
-      loanTypeOptions={loanTypesMeta.options}
-      hasUnknownLoanType={loanTypesMeta.hasUnknown}
+      deferLoanTypeOptions
     />
   );
 }

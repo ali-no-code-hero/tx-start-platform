@@ -20,20 +20,6 @@ const SEARCH_IDS_CAP = 60;
 const MAX_LOAN_FILTERS = 48;
 const MAX_LOC_FILTERS = 64;
 
-/** Flat select — no embedded resources; only list UI fields (avoids wide jsonb on every row). */
-const APPLICATION_FLAT_SELECT = `
-  id,
-  customer_id,
-  status,
-  created_at,
-  urgent_same_day,
-  loan_amount_requested,
-  loan_amount_approved,
-  type_of_loan,
-  location_id,
-  needs_location_review:submission_metadata->needs_location_review
-`;
-
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -56,8 +42,13 @@ function allTokens(v: string | string[] | undefined, max: number): string[] {
     .slice(0, max);
 }
 
+/** Keyset cursor: `created_at` ISO string from the DB + row `id` (stable with `order by created_at desc, id desc`). */
+export type ApplicationsListKeysetCursor = {
+  created_at: string;
+  id: string;
+};
+
 export type ApplicationsListQueryState = {
-  page: number;
   pageSize: number;
   q: string;
   status: ApplicationStatus | "all";
@@ -65,12 +56,37 @@ export type ApplicationsListQueryState = {
   locationIds: string[];
   unassignedOnly: boolean;
   loanTypes: string[];
+  /** Next page: rows strictly older than this tuple. Mutually exclusive with `before` in normal use. */
+  after: ApplicationsListKeysetCursor | null;
+  /** Previous page: rows strictly newer than this tuple. Mutually exclusive with `after` in normal use. */
+  before: ApplicationsListKeysetCursor | null;
 };
+
+function isValidIsoTimestamptz(s: string): boolean {
+  const t = Date.parse(s);
+  return Number.isFinite(t);
+}
+
+export function serializeApplicationsListCursor(c: ApplicationsListKeysetCursor): string {
+  return encodeURIComponent(JSON.stringify({ t: c.created_at, i: c.id }));
+}
+
+export function parseApplicationsListCursor(raw: string | undefined): ApplicationsListKeysetCursor | null {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(decodeURIComponent(raw)) as { t?: unknown; i?: unknown };
+    if (typeof o.t !== "string" || typeof o.i !== "string" || !o.t || !o.i) return null;
+    if (!isUuid(o.i)) return null;
+    if (!isValidIsoTimestamptz(o.t)) return null;
+    return { created_at: o.t, id: o.i };
+  } catch {
+    return null;
+  }
+}
 
 export function parseApplicationsListQuery(
   raw: Record<string, string | string[] | undefined>,
 ): ApplicationsListQueryState {
-  const page = Math.max(1, Number.parseInt(firstParam(raw.page) ?? "1", 10) || 1);
   const rawSize = Number.parseInt(firstParam(raw.pageSize) ?? "", 10);
   const pageSize = Number.isFinite(rawSize)
     ? Math.min(APPLICATION_LIST_PAGE_SIZE_MAX, Math.max(10, rawSize))
@@ -95,8 +111,11 @@ export function parseApplicationsListQuery(
 
   const loanTypes = allTokens(raw.loan, MAX_LOAN_FILTERS);
 
+  const after = parseApplicationsListCursor(firstParam(raw.after));
+  const beforeRaw = parseApplicationsListCursor(firstParam(raw.before));
+  const before = after ? null : beforeRaw;
+
   return {
-    page,
     pageSize,
     q,
     status,
@@ -104,6 +123,8 @@ export function parseApplicationsListQuery(
     locationIds,
     unassignedOnly,
     loanTypes,
+    after,
+    before,
   };
 }
 
@@ -362,6 +383,21 @@ export function applicationsListHasActiveFilters(s: ApplicationsListQueryState):
   );
 }
 
+/**
+ * True when list/count queries apply non-default DB predicates (matches what the server actually filters).
+ * Short search text (below MIN_SEARCH_CHARS) is ignored for loading, so it is not "effective".
+ */
+export function applicationsListHasEffectiveListFilters(s: ApplicationsListQueryState): boolean {
+  return (
+    s.status !== "all" ||
+    s.urgent !== "all" ||
+    s.locationIds.length > 0 ||
+    s.unassignedOnly ||
+    s.loanTypes.length > 0 ||
+    s.q.trim().length >= APPLICATION_LIST_MIN_SEARCH_CHARS
+  );
+}
+
 function applyApplicationsListSearchOr(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder
   q: any,
@@ -396,6 +432,9 @@ export async function fetchApplicationsMatchingCount(
   resolved: ApplicationsListSearchResolved,
 ): Promise<number | null> {
   if (resolved.token.length > 0) {
+    return null;
+  }
+  if (!applicationsListHasEffectiveListFilters(params)) {
     return null;
   }
   try {
@@ -544,102 +583,68 @@ export async function fetchApplicationsPage(
   options?: { timings?: ApplicationsListFetchTimings },
 ): Promise<ApplicationsListFetchResult> {
   try {
-    const { page, pageSize } = params;
-    const from = (page - 1) * pageSize;
-
-    let rawFlat: FlatApplicationRow[];
-
-    if (resolved.token.length > 0) {
-      const knownLoanTypes = params.loanTypes.filter((l) => l !== "Unknown");
-      const selectStarted = performance.now();
-      const { data: rpcData, error: rpcError } = await supabase.rpc("applications_list_flat_page", {
-        p_limit: pageSize + 1,
-        p_offset: from,
-        p_status: params.status === "all" ? "all" : params.status,
-        p_urgent: params.urgent,
-        p_filter_by_location: params.locationIds.length > 0 || params.unassignedOnly,
-        p_unassigned_only: params.unassignedOnly,
-        p_filter_location_ids: params.locationIds,
-        p_has_loan_filter: params.loanTypes.length > 0,
-        p_loan_unknown: params.loanTypes.includes("Unknown"),
-        p_loan_types: knownLoanTypes,
-        p_search_token: resolved.token,
-        p_search_customer_ids: resolved.customerIds,
-        p_search_location_ids: resolved.locationIds,
-        p_search_statuses: applicationStatusesMatchingSearchToken(resolved.token),
-      });
-      if (options?.timings) {
-        options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
-      }
-
-      if (rpcError) {
-        const f = buildFailure(
-          "applications_list_rpc",
-          { error: rpcError, status: 500, statusText: "RPC Error" },
-          undefined,
-        );
-        return {
-          rows: f.rows,
-          total: f.total,
-          hasNextPage: f.hasNextPage,
-          error: f.error,
-          logContext: { ...f.logContext, listFetchMode: "applications_list_flat_page_rpc" },
-          listDataSource: "rpc",
-        };
-      }
-
-      rawFlat = (rpcData ?? []) as FlatApplicationRow[];
-    } else {
-      let dataQuery = supabase
-        .from("applications")
-        .select(APPLICATION_FLAT_SELECT)
-        .order("created_at", { ascending: false });
-
-      dataQuery = applyApplicationListFilters(dataQuery, params);
-      dataQuery = applyApplicationsListSearchOr(dataQuery, resolved);
-
-      const pagedQuery = dataQuery.range(from, from + pageSize);
-      const listUrlLen = getPostgrestUrlLength(pagedQuery);
-      const selectStarted = performance.now();
-      const pageRes = await pagedQuery;
-      if (options?.timings) {
-        options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
-      }
-
-      if (pageRes.error) {
-        const f = buildFailure(
-          "applications_list_page",
-          { error: pageRes.error, status: pageRes.status, statusText: pageRes.statusText },
-          listUrlLen,
-        );
-        return {
-          rows: f.rows,
-          total: f.total,
-          hasNextPage: f.hasNextPage,
-          error: f.error,
-          logContext: { ...f.logContext, listFetchMode: "postgrest_select", listDataSource: "rest" },
-          listDataSource: "rest",
-        };
-      }
-
-      rawFlat = (pageRes.data ?? []) as FlatApplicationRow[];
+    const { pageSize } = params;
+    const knownLoanTypes = params.loanTypes.filter((l) => l !== "Unknown");
+    const useBefore = params.before != null;
+    const selectStarted = performance.now();
+    const { data: rpcData, error: rpcError } = await supabase.rpc("applications_list_flat_page", {
+      p_limit: pageSize + 1,
+      p_after_created_at: useBefore ? null : params.after?.created_at ?? null,
+      p_after_id: useBefore ? null : params.after?.id ?? null,
+      p_before_created_at: useBefore ? params.before!.created_at : null,
+      p_before_id: useBefore ? params.before!.id : null,
+      p_status: params.status === "all" ? "all" : params.status,
+      p_urgent: params.urgent,
+      p_filter_by_location: params.locationIds.length > 0 || params.unassignedOnly,
+      p_unassigned_only: params.unassignedOnly,
+      p_filter_location_ids: params.locationIds,
+      p_has_loan_filter: params.loanTypes.length > 0,
+      p_loan_unknown: params.loanTypes.includes("Unknown"),
+      p_loan_types: knownLoanTypes,
+      p_search_token: resolved.token,
+      p_search_customer_ids: resolved.customerIds,
+      p_search_location_ids: resolved.locationIds,
+      p_search_statuses: applicationStatusesMatchingSearchToken(resolved.token),
+    });
+    if (options?.timings) {
+      options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
     }
+
+    if (rpcError) {
+      const f = buildFailure(
+        "applications_list_rpc",
+        { error: rpcError, status: 500, statusText: "RPC Error" },
+        undefined,
+      );
+      return {
+        rows: f.rows,
+        total: f.total,
+        hasNextPage: f.hasNextPage,
+        error: f.error,
+        logContext: { ...f.logContext, listFetchMode: "applications_list_flat_page_rpc_keyset" },
+        listDataSource: "rpc",
+      };
+    }
+
+    const rawFlat = (rpcData ?? []) as FlatApplicationRow[];
 
     let hasNextPage: boolean;
     let total: number | null;
     let flatRows: FlatApplicationRow[];
 
+    const atFirstAnchor = params.after == null && params.before == null;
+
     if (rawFlat.length === 0) {
       hasNextPage = false;
       flatRows = [];
-      total = from === 0 ? 0 : null;
+      total = atFirstAnchor ? 0 : null;
     } else if (rawFlat.length > pageSize) {
       hasNextPage = true;
       total = null;
       flatRows = rawFlat.slice(0, pageSize);
     } else {
       hasNextPage = false;
-      total = from + rawFlat.length;
+      total = atFirstAnchor ? rawFlat.length : null;
       flatRows = rawFlat;
     }
 
@@ -647,7 +652,7 @@ export async function fetchApplicationsPage(
     if (hydrated.error) {
       return {
         ...hydrated,
-        listDataSource: resolved.token.length > 0 ? "rpc" : "rest",
+        listDataSource: "rpc",
       };
     }
 
@@ -656,7 +661,7 @@ export async function fetchApplicationsPage(
       total,
       hasNextPage,
       error: null,
-      listDataSource: resolved.token.length > 0 ? "rpc" : "rest",
+      listDataSource: "rpc",
     };
   } catch (unexpected) {
     return {
@@ -675,7 +680,8 @@ export async function fetchApplicationsPage(
 
 export function applicationsListSearchParams(state: ApplicationsListQueryState): URLSearchParams {
   const p = new URLSearchParams();
-  if (state.page > 1) p.set("page", String(state.page));
+  if (state.after) p.set("after", serializeApplicationsListCursor(state.after));
+  if (state.before) p.set("before", serializeApplicationsListCursor(state.before));
   if (state.pageSize !== APPLICATION_LIST_PAGE_SIZE_DEFAULT) {
     p.set("pageSize", String(state.pageSize));
   }

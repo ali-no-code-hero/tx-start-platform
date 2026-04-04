@@ -51,7 +51,6 @@ export default async function ApplicationsPage({
     timer.finish({
       profileRole: profile.role,
       abortedAfter: "wave1_search_resolve_failed",
-      page: listQuery.page,
       pageSize: listQuery.pageSize,
       hasSearch: listQuery.q.trim().length > 0,
     });
@@ -65,7 +64,6 @@ export default async function ApplicationsPage({
         locationId: profile.location_id,
         query: "applications_search_resolve",
         listQuery: {
-          page: listQuery.page,
           pageSize: listQuery.pageSize,
           qLen: listQuery.q.length,
           status: listQuery.status,

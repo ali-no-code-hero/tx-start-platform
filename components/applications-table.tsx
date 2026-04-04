@@ -35,7 +35,8 @@ function patchListQuery(
   patch: Partial<ApplicationsListQueryState>,
 ): ApplicationsListQueryState {
   const next: ApplicationsListQueryState = { ...base, ...patch };
-  if (patch.page !== undefined) return next;
+  if (patch.after !== undefined && patch.after != null) next.before = null;
+  if (patch.before !== undefined && patch.before != null) next.after = null;
   if (
     patch.q !== undefined ||
     patch.status !== undefined ||
@@ -45,7 +46,8 @@ function patchListQuery(
     patch.loanTypes !== undefined ||
     patch.pageSize !== undefined
   ) {
-    next.page = 1;
+    next.after = null;
+    next.before = null;
   }
   return next;
 }
@@ -75,7 +77,7 @@ export function ApplicationsTable({
   rows,
   totalCount,
   hasNextPage,
-  page,
+  hasPreviousPage,
   pageSize,
   queryState,
   isAdmin,
@@ -83,12 +85,14 @@ export function ApplicationsTable({
   locations = [],
   loanTypeOptions = [],
   hasUnknownLoanType = false,
+  deferLoanTypeOptions = false,
 }: {
   rows: ApplicationRow[];
   /** Exact total when known (last page or full count); `null` when more rows may exist after this page. */
   totalCount: number | null;
   hasNextPage: boolean;
-  page: number;
+  /** True when URL has a keyset cursor (`after` or `before`). */
+  hasPreviousPage: boolean;
   pageSize: number;
   queryState: ApplicationsListQueryState;
   isAdmin: boolean;
@@ -96,10 +100,55 @@ export function ApplicationsTable({
   locations?: { id: string; name: string }[];
   loanTypeOptions?: string[];
   hasUnknownLoanType?: boolean;
+  /**
+   * When true, loan-type chips load via `/api/applications/loan-type-options` after mount
+   * so the main list RSC does not block on the distinct RPC.
+   */
+  deferLoanTypeOptions?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const queryRef = useRef(queryState);
+
+  const [deferredLoanLoad, setDeferredLoanLoad] = useState<"loading" | "done" | "error">(
+    () => (deferLoanTypeOptions ? "loading" : "done"),
+  );
+  const [deferredLoanOptions, setDeferredLoanOptions] = useState<string[]>([]);
+  const [deferredLoanUnknown, setDeferredLoanUnknown] = useState(false);
+
+  useEffect(() => {
+    if (!deferLoanTypeOptions) return;
+    let cancelled = false;
+    fetch("/api/applications/loan-type-options")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ options?: unknown; has_unknown?: unknown }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const raw = data.options;
+        const options = Array.isArray(raw)
+          ? raw.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+          : [];
+        setDeferredLoanOptions(
+          [...new Set(options.map((t) => t.trim()))].sort((a, b) => a.localeCompare(b)),
+        );
+        setDeferredLoanUnknown(Boolean(data.has_unknown));
+        setDeferredLoanLoad("done");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDeferredLoanOptions([]);
+        setDeferredLoanUnknown(false);
+        setDeferredLoanLoad("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deferLoanTypeOptions]);
+
+  const effectiveLoanOptions = deferLoanTypeOptions ? deferredLoanOptions : loanTypeOptions;
+  const effectiveLoanUnknown = deferLoanTypeOptions ? deferredLoanUnknown : hasUnknownLoanType;
   useEffect(() => {
     queryRef.current = queryState;
   }, [queryState]);
@@ -125,12 +174,39 @@ export function ApplicationsTable({
     router.push(listHref(pathname, next));
   };
 
-  const showLoanTypeFilters = loanTypeOptions.length > 0 || hasUnknownLoanType;
+  const showLoanTypeFilters =
+    (deferLoanTypeOptions &&
+      (deferredLoanLoad === "loading" || deferredLoanLoad === "error")) ||
+    effectiveLoanOptions.length > 0 ||
+    effectiveLoanUnknown;
   const totalPages =
     totalCount != null ? Math.max(1, Math.ceil(totalCount / pageSize)) : null;
+  const isAnchorPage = queryState.after == null && queryState.before == null;
   const from =
-    rows.length === 0 ? 0 : (page - 1) * pageSize + 1;
-  const to = from + rows.length - 1;
+    rows.length === 0 ? 0 : isAnchorPage ? 1 : null;
+  const to = rows.length === 0 ? 0 : rows.length;
+  const firstRow = rows[0];
+  const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
+  const prevHref =
+    hasPreviousPage && firstRow
+      ? listHref(
+          pathname,
+          patchListQuery(queryState, {
+            before: { created_at: firstRow.created_at, id: firstRow.id },
+            after: null,
+          }),
+        )
+      : null;
+  const nextHref =
+    hasNextPage && lastRow
+      ? listHref(
+          pathname,
+          patchListQuery(queryState, {
+            after: { created_at: lastRow.created_at, id: lastRow.id },
+            before: null,
+          }),
+        )
+      : null;
 
   return (
     <div className="space-y-4">
@@ -258,51 +334,59 @@ export function ApplicationsTable({
         {showLoanTypeFilters ? (
           <div className="grid gap-2">
             <Label className="text-muted-foreground">Loan type</Label>
-            <div className="flex flex-wrap gap-1">
-              {hasUnknownLoanType ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={
-                    queryState.loanTypes.includes("Unknown") ? "default" : "outline"
-                  }
-                  onClick={() =>
-                    pushList(
-                      patchListQuery(queryState, {
-                        loanTypes: toggleList(
-                          queryState.loanTypes,
-                          "Unknown",
-                          (a, b) => a === b,
-                        ),
-                      }),
-                    )
-                  }
-                >
-                  Unknown
-                </Button>
-              ) : null}
-              {loanTypeOptions.map((lt) => {
-                const on = queryState.loanTypes.includes(lt);
-                return (
+            {deferLoanTypeOptions && deferredLoanLoad === "loading" ? (
+              <p className="text-xs text-muted-foreground">Loading loan type filters…</p>
+            ) : deferLoanTypeOptions && deferredLoanLoad === "error" ? (
+              <p className="text-xs text-destructive">
+                Loan type filters could not be loaded. Refresh the page or try again later.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {effectiveLoanUnknown ? (
                   <Button
-                    key={lt}
                     type="button"
                     size="sm"
-                    variant={on ? "default" : "outline"}
-                    className={cn(on && "font-medium")}
+                    variant={
+                      queryState.loanTypes.includes("Unknown") ? "default" : "outline"
+                    }
                     onClick={() =>
                       pushList(
                         patchListQuery(queryState, {
-                          loanTypes: toggleList(queryState.loanTypes, lt, (a, b) => a === b),
+                          loanTypes: toggleList(
+                            queryState.loanTypes,
+                            "Unknown",
+                            (a, b) => a === b,
+                          ),
                         }),
                       )
                     }
                   >
-                    {lt}
+                    Unknown
                   </Button>
-                );
-              })}
-            </div>
+                ) : null}
+                {effectiveLoanOptions.map((lt) => {
+                  const on = queryState.loanTypes.includes(lt);
+                  return (
+                    <Button
+                      key={lt}
+                      type="button"
+                      size="sm"
+                      variant={on ? "default" : "outline"}
+                      className={cn(on && "font-medium")}
+                      onClick={() =>
+                        pushList(
+                          patchListQuery(queryState, {
+                            loanTypes: toggleList(queryState.loanTypes, lt, (a, b) => a === b),
+                          }),
+                        )
+                      }
+                    >
+                      {lt}
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ) : null}
       </div>
@@ -378,16 +462,22 @@ export function ApplicationsTable({
         <p className="text-sm text-muted-foreground">
           {rows.length === 0
             ? "No results"
-            : totalCount != null
-              ? `Showing ${from}–${to} of ${totalCount}`
-              : hasNextPage
-                ? `Showing ${from}–${to}+`
-                : `Showing ${from}–${to}`}
+            : from != null
+              ? totalCount != null
+                ? `Showing ${from}–${to} of ${totalCount}`
+                : hasNextPage
+                  ? `Showing ${from}–${to}+`
+                  : `Showing ${from}–${to}`
+              : totalCount != null
+                ? `Showing ${rows.length} of ${totalCount}`
+                : hasNextPage
+                  ? `Showing ${rows.length} (more below)`
+                  : `Showing ${rows.length}`}
         </p>
         <div className="flex items-center gap-2">
-          {page > 1 ? (
+          {prevHref ? (
             <Link
-              href={listHref(pathname, patchListQuery(queryState, { page: page - 1 }))}
+              href={prevHref}
               className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
             >
               Previous
@@ -397,12 +487,12 @@ export function ApplicationsTable({
               Previous
             </Button>
           )}
-          <span className="text-sm text-muted-foreground tabular-nums">
-            {totalPages != null ? `Page ${page} of ${totalPages}` : `Page ${page}`}
+          <span className="min-w-[5rem] text-center text-sm text-muted-foreground tabular-nums">
+            {isAnchorPage && totalPages != null ? `~${totalPages} pages` : !isAnchorPage ? "···" : ""}
           </span>
-          {(totalPages != null ? page < totalPages : hasNextPage) ? (
+          {nextHref ? (
             <Link
-              href={listHref(pathname, patchListQuery(queryState, { page: page + 1 }))}
+              href={nextHref}
               className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
             >
               Next
