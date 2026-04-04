@@ -10,6 +10,11 @@ import { APPLICATION_STATUSES } from "@/lib/types";
 
 export const APPLICATION_LIST_PAGE_SIZE_DEFAULT = 50;
 export const APPLICATION_LIST_PAGE_SIZE_MAX = 100;
+/**
+ * Shorter tokens skip search (no customer/location resolution, no wide `.or()` / RPC search).
+ * Avoids statement_timeout from overly broad ILIKE + OR plans.
+ */
+export const APPLICATION_LIST_MIN_SEARCH_CHARS = 5;
 /** Keeps `.in(uuid,...)` filters within typical reverse-proxy URL limits. */
 const SEARCH_IDS_CAP = 60;
 const MAX_LOAN_FILTERS = 48;
@@ -112,6 +117,11 @@ function sanitizeSearchToken(raw: string): string {
     .replace(/[,()]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function applicationStatusesMatchingSearchToken(token: string): ApplicationStatus[] {
+  const t = token.toLowerCase();
+  return APPLICATION_STATUSES.filter((s) => s.toLowerCase().includes(t));
 }
 
 function escapePostgrestInToken(s: string): string {
@@ -326,7 +336,7 @@ export async function resolveApplicationsListSearch(
   | { ok: false; failure: ApplicationsListFetchFailure }
 > {
   const token = sanitizeSearchToken(params.q);
-  if (!token) {
+  if (!token || token.length < APPLICATION_LIST_MIN_SEARCH_CHARS) {
     return { ok: true, resolved: { token: "", customerIds: [], locationIds: [] } };
   }
   const result = await resolveSearchCustomerAndLocationIds(supabase, token);
@@ -385,6 +395,9 @@ export async function fetchApplicationsMatchingCount(
   params: ApplicationsListQueryState,
   resolved: ApplicationsListSearchResolved,
 ): Promise<number | null> {
+  if (resolved.token.length > 0) {
+    return null;
+  }
   try {
     let q = supabase.from("applications").select("id", { count: "planned", head: true });
     q = applyApplicationListFilters(q, params);
@@ -428,39 +441,178 @@ export type ApplicationsListFetchResult = {
   logContext?: Record<string, unknown>;
 };
 
+/** Filled by `fetchApplicationsPage` when passed in `options.timings` (for server-side diagnostics). */
+export type ApplicationsListFetchTimings = {
+  applicationsSelectMs?: number;
+  batchHydrateMs?: number;
+};
+
+async function hydrateFlatApplicationRows(
+  supabase: SupabaseClient,
+  flatRows: FlatApplicationRow[],
+  options?: { timings?: ApplicationsListFetchTimings },
+): Promise<ApplicationsListFetchResult | ApplicationsListFetchFailure> {
+  const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
+  const uniqueLocationIds = [
+    ...new Set(
+      flatRows.map((r) => r.location_id).filter((id): id is string => id != null && id !== ""),
+    ),
+  ];
+
+  const customersQ =
+    uniqueCustomerIds.length > 0
+      ? supabase
+          .from("customers")
+          .select("id, first_name, last_name, email, phone")
+          .in("id", uniqueCustomerIds)
+      : null;
+  const locationsQ =
+    uniqueLocationIds.length > 0
+      ? supabase.from("locations").select("id, name").in("id", uniqueLocationIds)
+      : null;
+
+  const customersUrlLen = customersQ ? getPostgrestUrlLength(customersQ) : undefined;
+  const locationsUrlLen = locationsQ ? getPostgrestUrlLength(locationsQ) : undefined;
+
+  const hydrateStarted = performance.now();
+  const [customersRes, locationsRes] = await Promise.all([
+    customersQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
+    locationsQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
+  ]);
+  if (options?.timings) {
+    options.timings.batchHydrateMs = Math.round(performance.now() - hydrateStarted);
+  }
+
+  if (customersRes.error) {
+    return buildFailure(
+      "applications_list_customers_batch",
+      {
+        error: customersRes.error,
+        status: customersRes.status,
+        statusText: customersRes.statusText,
+      },
+      customersUrlLen,
+    );
+  }
+  if (locationsRes.error) {
+    return buildFailure(
+      "applications_list_locations_batch",
+      {
+        error: locationsRes.error,
+        status: locationsRes.status,
+        statusText: locationsRes.statusText,
+      },
+      locationsUrlLen,
+    );
+  }
+
+  const customersById = new Map<
+    string,
+    { id: string; first_name: string; last_name: string; email: string; phone: string | null }
+  >();
+  for (const row of customersRes.data ?? []) {
+    const c = row as {
+      id: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+      phone: string | null;
+    };
+    customersById.set(c.id, c);
+  }
+
+  const locationsById = new Map<string, { name: string }>();
+  for (const row of locationsRes.data ?? []) {
+    const l = row as { id: string; name: string };
+    locationsById.set(l.id, { name: l.name });
+  }
+
+  return {
+    rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
+    total: null,
+    hasNextPage: false,
+    error: null,
+  };
+}
+
 export async function fetchApplicationsPage(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
   resolved: ApplicationsListSearchResolved,
+  options?: { timings?: ApplicationsListFetchTimings },
 ): Promise<ApplicationsListFetchResult> {
   try {
     const { page, pageSize } = params;
     const from = (page - 1) * pageSize;
-    /** Fetch one extra row so we know if another page exists without a global COUNT (avoids statement_timeout on large tables). */
-    const to = from + pageSize;
 
-    // Omit PostgREST count on this request: use pageSize+1 to detect "next page".
-    let dataQuery = supabase
-      .from("applications")
-      .select(APPLICATION_FLAT_SELECT)
-      .order("created_at", { ascending: false });
+    let rawFlat: FlatApplicationRow[];
 
-    dataQuery = applyApplicationListFilters(dataQuery, params);
-    dataQuery = applyApplicationsListSearchOr(dataQuery, resolved);
+    if (resolved.token.length > 0) {
+      const knownLoanTypes = params.loanTypes.filter((l) => l !== "Unknown");
+      const selectStarted = performance.now();
+      const { data: rpcData, error: rpcError } = await supabase.rpc("applications_list_flat_page", {
+        p_limit: pageSize + 1,
+        p_offset: from,
+        p_status: params.status === "all" ? "all" : params.status,
+        p_urgent: params.urgent,
+        p_filter_by_location: params.locationIds.length > 0 || params.unassignedOnly,
+        p_unassigned_only: params.unassignedOnly,
+        p_filter_location_ids: params.locationIds,
+        p_has_loan_filter: params.loanTypes.length > 0,
+        p_loan_unknown: params.loanTypes.includes("Unknown"),
+        p_loan_types: knownLoanTypes,
+        p_search_token: resolved.token,
+        p_search_customer_ids: resolved.customerIds,
+        p_search_location_ids: resolved.locationIds,
+        p_search_statuses: applicationStatusesMatchingSearchToken(resolved.token),
+      });
+      if (options?.timings) {
+        options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
+      }
 
-    const pagedQuery = dataQuery.range(from, to);
-    const listUrlLen = getPostgrestUrlLength(pagedQuery);
-    const pageRes = await pagedQuery;
+      if (rpcError) {
+        const f = buildFailure(
+          "applications_list_rpc",
+          { error: rpcError, status: 500, statusText: "RPC Error" },
+          undefined,
+        );
+        return {
+          rows: f.rows,
+          total: f.total,
+          hasNextPage: f.hasNextPage,
+          error: f.error,
+          logContext: { ...f.logContext, listFetchMode: "applications_list_flat_page_rpc" },
+        };
+      }
 
-    if (pageRes.error) {
-      return buildFailure(
-        "applications_list_page",
-        { error: pageRes.error, status: pageRes.status, statusText: pageRes.statusText },
-        listUrlLen,
-      );
+      rawFlat = (rpcData ?? []) as FlatApplicationRow[];
+    } else {
+      let dataQuery = supabase
+        .from("applications")
+        .select(APPLICATION_FLAT_SELECT)
+        .order("created_at", { ascending: false });
+
+      dataQuery = applyApplicationListFilters(dataQuery, params);
+      dataQuery = applyApplicationsListSearchOr(dataQuery, resolved);
+
+      const pagedQuery = dataQuery.range(from, from + pageSize);
+      const listUrlLen = getPostgrestUrlLength(pagedQuery);
+      const selectStarted = performance.now();
+      const pageRes = await pagedQuery;
+      if (options?.timings) {
+        options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
+      }
+
+      if (pageRes.error) {
+        return buildFailure(
+          "applications_list_page",
+          { error: pageRes.error, status: pageRes.status, statusText: pageRes.statusText },
+          listUrlLen,
+        );
+      }
+
+      rawFlat = (pageRes.data ?? []) as FlatApplicationRow[];
     }
-
-    const rawFlat = (pageRes.data ?? []) as FlatApplicationRow[];
 
     let hasNextPage: boolean;
     let total: number | null;
@@ -480,79 +632,13 @@ export async function fetchApplicationsPage(
       flatRows = rawFlat;
     }
 
-    const uniqueCustomerIds = [...new Set(flatRows.map((r) => r.customer_id))];
-    const uniqueLocationIds = [
-      ...new Set(
-        flatRows.map((r) => r.location_id).filter((id): id is string => id != null && id !== ""),
-      ),
-    ];
-
-    const customersQ =
-      uniqueCustomerIds.length > 0
-        ? supabase
-            .from("customers")
-            .select("id, first_name, last_name, email, phone")
-            .in("id", uniqueCustomerIds)
-        : null;
-    const locationsQ =
-      uniqueLocationIds.length > 0
-        ? supabase.from("locations").select("id, name").in("id", uniqueLocationIds)
-        : null;
-
-    const customersUrlLen = customersQ ? getPostgrestUrlLength(customersQ) : undefined;
-    const locationsUrlLen = locationsQ ? getPostgrestUrlLength(locationsQ) : undefined;
-
-    const [customersRes, locationsRes] = await Promise.all([
-      customersQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
-      locationsQ ?? Promise.resolve({ data: [] as Record<string, unknown>[], error: null, status: 200, statusText: "OK" }),
-    ]);
-
-    if (customersRes.error) {
-      return buildFailure(
-        "applications_list_customers_batch",
-        {
-          error: customersRes.error,
-          status: customersRes.status,
-          statusText: customersRes.statusText,
-        },
-        customersUrlLen,
-      );
-    }
-    if (locationsRes.error) {
-      return buildFailure(
-        "applications_list_locations_batch",
-        {
-          error: locationsRes.error,
-          status: locationsRes.status,
-          statusText: locationsRes.statusText,
-        },
-        locationsUrlLen,
-      );
-    }
-
-    const customersById = new Map<
-      string,
-      { id: string; first_name: string; last_name: string; email: string; phone: string | null }
-    >();
-    for (const row of customersRes.data ?? []) {
-      const c = row as {
-        id: string;
-        first_name: string;
-        last_name: string;
-        email: string;
-        phone: string | null;
-      };
-      customersById.set(c.id, c);
-    }
-
-    const locationsById = new Map<string, { name: string }>();
-    for (const row of locationsRes.data ?? []) {
-      const l = row as { id: string; name: string };
-      locationsById.set(l.id, { name: l.name });
+    const hydrated = await hydrateFlatApplicationRows(supabase, flatRows, options);
+    if (hydrated.error) {
+      return hydrated;
     }
 
     return {
-      rows: mapFlatToApplicationRows(flatRows, customersById, locationsById),
+      rows: hydrated.rows,
       total,
       hasNextPage,
       error: null,

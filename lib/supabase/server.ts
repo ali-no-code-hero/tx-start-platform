@@ -1,9 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
 
-export async function createClient() {
+export const createClient = cache(async function createClient() {
   const cookieStore = await cookies();
   const url = getSupabaseUrl();
   const key = getSupabaseAnonKey();
@@ -35,4 +36,4 @@ export async function createClient() {
       db: { urlLengthLimit: 120_000 },
     },
   );
-}
+});

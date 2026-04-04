@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  APPLICATION_LIST_MIN_SEARCH_CHARS,
   applicationsListSearchParams,
   type ApplicationsListQueryState,
 } from "@/lib/applications-list";
@@ -133,17 +134,26 @@ export function ApplicationsTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Input
-          placeholder={
-            isCustomer
-              ? "Search loan type, location, status…"
-              : "Search name, email, phone, loan type…"
-          }
-          value={qInput}
-          onChange={(e) => setQInput(e.target.value)}
-          className="max-w-md bg-background"
-        />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex max-w-md flex-1 flex-col gap-1">
+          <Input
+            placeholder={
+              isCustomer
+                ? `Search loan type, location, status… (${APPLICATION_LIST_MIN_SEARCH_CHARS}+ characters)`
+                : `Search name, email, phone, loan type… (${APPLICATION_LIST_MIN_SEARCH_CHARS}+ characters)`
+            }
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+            className="bg-background"
+          />
+          {qInput.trim().length > 0 &&
+          qInput.trim().length < APPLICATION_LIST_MIN_SEARCH_CHARS ? (
+            <p className="text-xs text-muted-foreground">
+              Type at least {APPLICATION_LIST_MIN_SEARCH_CHARS} characters to run search (shorter
+              text is ignored for loading the list).
+            </p>
+          ) : null}
+        </div>
         <div className="flex flex-wrap gap-2">
           {(["all", ...APPLICATION_STATUSES] as const).map((s) => (
             <button
