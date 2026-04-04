@@ -1,6 +1,5 @@
 import {
   applicationsListHasActiveFilters,
-  applicationsListHasEffectiveListFilters,
   fetchApplicationsMatchingCount,
   type ApplicationsListQueryState,
   type ApplicationsListSearchResolved,
@@ -40,16 +39,10 @@ export async function ApplicationsMatchingCount({
               : profileRole === "staff"
                 ? " you can access"
                 : ""}
-          <span className="font-normal"> (planner estimate)</span>.
-        </>
-      ) : (
-        <>
-          Total count is unavailable right now
-          {profileRole === "admin" && !applicationsListHasEffectiveListFilters(listQuery)
-            ? " — all applications still load below"
-            : ""}
           .
         </>
+      ) : (
+        <>Total count is unavailable right now (try refreshing).</>
       )}
     </p>
   );

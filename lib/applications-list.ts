@@ -148,9 +148,26 @@ function applicationStatusesMatchingSearchToken(token: string): ApplicationStatu
   return APPLICATION_STATUSES.filter((s) => s.toLowerCase().includes(t));
 }
 
-function escapePostgrestInToken(s: string): string {
-  if (/^[a-zA-Z0-9 _./+\-]+$/.test(s)) return s;
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+/** Shared filter + search args for `applications_list_flat_page` and `applications_list_matching_count`. */
+function applicationsListFlatRpcFilters(
+  params: ApplicationsListQueryState,
+  resolved: ApplicationsListSearchResolved,
+) {
+  const knownLoanTypes = params.loanTypes.filter((l) => l !== "Unknown");
+  return {
+    p_status: params.status === "all" ? "all" : params.status,
+    p_urgent: params.urgent,
+    p_filter_by_location: params.locationIds.length > 0 || params.unassignedOnly,
+    p_unassigned_only: params.unassignedOnly,
+    p_filter_location_ids: params.locationIds,
+    p_has_loan_filter: params.loanTypes.length > 0,
+    p_loan_unknown: params.loanTypes.includes("Unknown"),
+    p_loan_types: knownLoanTypes,
+    p_search_token: resolved.token,
+    p_search_customer_ids: resolved.customerIds,
+    p_search_location_ids: resolved.locationIds,
+    p_search_statuses: applicationStatusesMatchingSearchToken(resolved.token),
+  };
 }
 
 type PostgrestFailureParts = {
@@ -245,55 +262,6 @@ function mapFlatToApplicationRows(
     customers: customersById.get(a.customer_id) ?? null,
     locations: a.location_id ? locationsById.get(a.location_id) ?? null : null,
   }));
-}
-
-/**
- * Shared filters for list + count queries. Uses a loose type so the same logic applies to
- * different PostgREST select shapes (full row vs id-only head count).
- */
-function applyApplicationListFilters(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder differs per select()
-  q: any,
-  params: ApplicationsListQueryState,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): any {
-  const { status, urgent, locationIds, unassignedOnly, loanTypes } = params;
-
-  if (status !== "all") {
-    q = q.eq("status", status);
-  }
-
-  if (urgent === "yes") {
-    q = q.eq("urgent_same_day", true);
-  } else if (urgent === "no") {
-    q = q.eq("urgent_same_day", false);
-  }
-
-  const hasLoc = locationIds.length > 0 || unassignedOnly;
-  if (hasLoc) {
-    if (unassignedOnly && locationIds.length === 0) {
-      q = q.is("location_id", null);
-    } else if (!unassignedOnly && locationIds.length > 0) {
-      q = q.in("location_id", locationIds);
-    } else {
-      q = q.or(`location_id.is.null,location_id.in.(${locationIds.join(",")})`);
-    }
-  }
-
-  if (loanTypes.length > 0) {
-    const wantUnknown = loanTypes.includes("Unknown");
-    const known = loanTypes.filter((l) => l !== "Unknown");
-    if (wantUnknown && known.length > 0) {
-      const inList = known.map(escapePostgrestInToken).join(",");
-      q = q.or(`type_of_loan.is.null,type_of_loan.eq.,type_of_loan.in.(${inList})`);
-    } else if (wantUnknown) {
-      q = q.or("type_of_loan.is.null,type_of_loan.eq.");
-    } else {
-      q = q.in("type_of_loan", known);
-    }
-  }
-
-  return q;
 }
 
 async function resolveSearchCustomerAndLocationIds(
@@ -401,52 +369,27 @@ export function applicationsListHasEffectiveListFilters(s: ApplicationsListQuery
   );
 }
 
-function applyApplicationsListSearchOr(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PostgREST builder
-  q: any,
-  resolved: ApplicationsListSearchResolved,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): any {
-  if (!resolved.token) return q;
-  const ilike = `%${resolved.token}%`;
-  const orParts: string[] = [`type_of_loan.ilike.${ilike}`];
-  const statusMatches = APPLICATION_STATUSES.filter((s) =>
-    s.toLowerCase().includes(resolved.token.toLowerCase()),
-  );
-  if (statusMatches.length > 0) {
-    orParts.push(`status.in.(${statusMatches.join(",")})`);
-  }
-  if (resolved.customerIds.length > 0) {
-    orParts.push(`customer_id.in.(${resolved.customerIds.join(",")})`);
-  }
-  if (resolved.locationIds.length > 0) {
-    orParts.push(`location_id.in.(${resolved.locationIds.join(",")})`);
-  }
-  return q.or(orParts.join(","));
-}
-
 /**
- * Total rows matching current filters + search (RLS-scoped). Separate HEAD request using
- * planner statistics (`planned`) — fast and stable for large tables; can differ slightly from exact COUNT.
+ * Total rows matching current filters + search (RLS-scoped). Uses SQL RPC with the same
+ * predicates as the list query (`COUNT(*)` exact).
  */
 export async function fetchApplicationsMatchingCount(
   supabase: SupabaseClient,
   params: ApplicationsListQueryState,
   resolved: ApplicationsListSearchResolved,
 ): Promise<number | null> {
-  if (resolved.token.length > 0) {
-    return null;
-  }
-  if (!applicationsListHasEffectiveListFilters(params)) {
-    return null;
-  }
   try {
-    let q = supabase.from("applications").select("id", { count: "planned", head: true });
-    q = applyApplicationListFilters(q, params);
-    q = applyApplicationsListSearchOr(q, resolved);
-    const { count, error } = await q;
+    const { data, error } = await supabase.rpc(
+      "applications_list_matching_count",
+      applicationsListFlatRpcFilters(params, resolved),
+    );
     if (error) return null;
-    return typeof count === "number" ? count : null;
+    if (typeof data === "number" && Number.isFinite(data)) return data;
+    if (typeof data === "string" && data !== "") {
+      const n = Number(data);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -587,7 +530,6 @@ export async function fetchApplicationsPage(
 ): Promise<ApplicationsListFetchResult> {
   try {
     const { pageSize } = params;
-    const knownLoanTypes = params.loanTypes.filter((l) => l !== "Unknown");
     const useBefore = params.before != null;
     const selectStarted = performance.now();
     const { data: rpcData, error: rpcError } = await supabase.rpc("applications_list_flat_page", {
@@ -596,18 +538,7 @@ export async function fetchApplicationsPage(
       p_after_id: useBefore ? null : params.after?.id ?? null,
       p_before_created_at: useBefore ? params.before!.created_at : null,
       p_before_id: useBefore ? params.before!.id : null,
-      p_status: params.status === "all" ? "all" : params.status,
-      p_urgent: params.urgent,
-      p_filter_by_location: params.locationIds.length > 0 || params.unassignedOnly,
-      p_unassigned_only: params.unassignedOnly,
-      p_filter_location_ids: params.locationIds,
-      p_has_loan_filter: params.loanTypes.length > 0,
-      p_loan_unknown: params.loanTypes.includes("Unknown"),
-      p_loan_types: knownLoanTypes,
-      p_search_token: resolved.token,
-      p_search_customer_ids: resolved.customerIds,
-      p_search_location_ids: resolved.locationIds,
-      p_search_statuses: applicationStatusesMatchingSearchToken(resolved.token),
+      ...applicationsListFlatRpcFilters(params, resolved),
     });
     if (options?.timings) {
       options.timings.applicationsSelectMs = Math.round(performance.now() - selectStarted);
