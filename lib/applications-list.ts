@@ -395,12 +395,32 @@ export async function fetchApplicationsMatchingCount(
   }
 }
 
+export type FetchLoanTypeFilterOptionsResult = {
+  options: string[];
+  hasUnknown: boolean;
+  rpcMs: number;
+  error: PostgrestLikeError | null;
+  /** Set when RPC succeeded but body was not `{ types, has_unknown }`. */
+  unexpectedShape?: boolean;
+};
+
 export async function fetchLoanTypeFilterOptions(
   supabase: SupabaseClient,
-): Promise<{ options: string[]; hasUnknown: boolean }> {
+): Promise<FetchLoanTypeFilterOptionsResult> {
+  const rpcStarted = performance.now();
   const { data, error } = await supabase.rpc("applications_distinct_loan_type_options");
+  const rpcMs = Math.round(performance.now() - rpcStarted);
 
-  if (!error && data != null && typeof data === "object" && !Array.isArray(data)) {
+  if (error) {
+    return {
+      options: [],
+      hasUnknown: false,
+      rpcMs,
+      error: coercePostgrestLikeError(error, { status: 500, statusText: "RPC Error" }),
+    };
+  }
+
+  if (data != null && typeof data === "object" && !Array.isArray(data)) {
     const o = data as { types?: unknown; has_unknown?: unknown };
     const rawTypes = o.types;
     const options = Array.isArray(rawTypes)
@@ -409,11 +429,23 @@ export async function fetchLoanTypeFilterOptions(
     return {
       options: [...new Set(options.map((t) => t.trim()))].sort((a, b) => a.localeCompare(b)),
       hasUnknown: Boolean(o.has_unknown),
+      rpcMs,
+      error: null,
     };
   }
 
-  // No table scan fallback: it matched multi-second PostgREST plans under RLS. Fix RPC / migration instead.
-  return { options: [], hasUnknown: false };
+  return {
+    options: [],
+    hasUnknown: false,
+    rpcMs,
+    unexpectedShape: true,
+    error: {
+      message: "applications_distinct_loan_type_options returned an unexpected payload",
+      code: null,
+      details: snapshotUnknownError(data, 800),
+      hint: null,
+    },
+  };
 }
 
 export type ApplicationsListFetchResult = {
