@@ -141,7 +141,10 @@ function sanitizeSearchToken(raw: string): string {
 }
 
 function applicationStatusesMatchingSearchToken(token: string): ApplicationStatus[] {
-  const t = token.toLowerCase();
+  const t = token.trim().toLowerCase();
+  // `"".includes("")` is true in JS — empty token must not return every status or the RPC
+  // treats search as active (non-empty p_search_statuses) and runs the heavy matching_ids path.
+  if (t.length === 0) return [];
   return APPLICATION_STATUSES.filter((s) => s.toLowerCase().includes(t));
 }
 
