@@ -158,14 +158,14 @@ export function LoginForm() {
 
   return (
     <div className="space-y-6">
-      <div className="flex rounded-lg border border-zinc-700 p-0.5">
+      <div className="flex rounded-lg border border-border bg-muted/50 p-0.5">
         <button
           type="button"
           onClick={() => setChannel("email")}
           className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
             channel === "email"
-              ? "bg-zinc-800 text-zinc-50"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           Email
@@ -175,8 +175,8 @@ export function LoginForm() {
           onClick={() => setChannel("phone")}
           className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
             channel === "phone"
-              ? "bg-zinc-800 text-zinc-50"
-              : "text-zinc-400 hover:text-zinc-200"
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           Phone
@@ -193,7 +193,7 @@ export function LoginForm() {
         >
           {channel === "email" ? (
             <div className="space-y-2">
-              <Label htmlFor="email" className="text-zinc-200">
+              <Label htmlFor="email">
                 Email
               </Label>
               <Input
@@ -204,15 +204,14 @@ export function LoginForm() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="border-zinc-700 bg-zinc-950 text-zinc-50"
               />
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Use the email on your account (same as your application or invite).
               </p>
             </div>
           ) : (
             <div className="space-y-2">
-              <Label htmlFor="phone" className="text-zinc-200">
+              <Label htmlFor="phone">
                 Mobile number
               </Label>
               <Input
@@ -228,9 +227,8 @@ export function LoginForm() {
                   if (f) setPhoneRaw(f);
                 }}
                 placeholder="(512) 767-3628"
-                className="border-zinc-700 bg-zinc-950 text-zinc-50"
               />
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Use the number on your Texas Star account. SMS is sent by Supabase Auth (configure
                 Phone provider in the Supabase dashboard).
               </p>
@@ -243,7 +241,7 @@ export function LoginForm() {
       ) : (
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="otp" className="text-zinc-200">
+            <Label htmlFor="otp">
               {OTP_DIGIT_COUNT}-digit code
             </Label>
             <Input
@@ -254,9 +252,9 @@ export function LoginForm() {
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/[^\d]/g, ""))}
               placeholder="00000000"
-              className="border-zinc-700 bg-zinc-950 text-center font-mono text-lg tracking-widest text-zinc-50"
+              className="text-center font-mono text-lg tracking-widest"
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               {channel === "email"
                 ? `Enter the ${OTP_DIGIT_COUNT}-digit code from your email.`
                 : `Enter the ${OTP_DIGIT_COUNT}-digit code from your text message.`}
@@ -271,22 +269,10 @@ export function LoginForm() {
             {loading ? "Verifying…" : "Verify and sign in"}
           </Button>
           <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="flex-1 border-zinc-700 bg-transparent text-zinc-200"
-              disabled={loading}
-              onClick={() => void sendCode()}
-            >
+            <Button type="button" variant="outline" className="flex-1" disabled={loading} onClick={() => void sendCode()}>
               Resend code
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="flex-1 border-zinc-700 bg-transparent text-zinc-200"
-              disabled={loading}
-              onClick={() => setStep("send")}
-            >
+            <Button type="button" variant="outline" className="flex-1" disabled={loading} onClick={() => setStep("send")}>
               Back
             </Button>
           </div>

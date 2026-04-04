@@ -237,14 +237,14 @@ export default async function ApplicationDetailPage({
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="border-l-[3px] border-primary pl-4">
           <Link
             href="/applications"
-            className="text-sm text-muted-foreground hover:text-foreground"
+            className="text-sm text-muted-foreground hover:text-primary"
           >
             ← Applications
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
             {customer ? `${customer.first_name} ${customer.last_name}` : "Application"}
           </h1>
           <p className="text-sm text-muted-foreground">

@@ -88,8 +88,8 @@ export default async function ApplicationsPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Applications</h1>
+      <div className="border-l-[3px] border-primary pl-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Applications</h1>
         <p className="text-sm text-muted-foreground">
           {profile.role === "customer"
             ? "Your loan applications and status updates."

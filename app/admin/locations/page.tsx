@@ -18,8 +18,8 @@ export default async function AdminLocationsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Locations</h1>
+      <div className="border-l-[3px] border-primary pl-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Locations</h1>
         <p className="text-sm text-muted-foreground">
           Store names must match Wix form values (e.g. Longview 2).
         </p>

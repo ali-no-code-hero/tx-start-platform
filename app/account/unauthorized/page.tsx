@@ -10,19 +10,31 @@ export default async function UnauthorizedAccountPage() {
   if (!user) redirect("/login");
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-950 px-4">
-      <div className="w-full max-w-md space-y-6 rounded-xl border border-zinc-800 bg-zinc-900/80 p-8 shadow-xl">
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand-navy-deep via-brand-navy to-[oklch(0.18_0.09_28)]"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/3 size-64 -translate-x-1/2 rounded-full bg-primary/15 blur-3xl"
+        aria-hidden
+      />
+      <div className="relative w-full max-w-md space-y-6 rounded-2xl border border-white/15 bg-card/95 p-8 shadow-2xl shadow-black/25 backdrop-blur-sm">
         <div className="space-y-2 text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-50">
+          <p className="text-[0.65rem] font-bold uppercase tracking-[0.28em] text-primary">
+            Texas Star
+          </p>
+          <h1 className="text-xl font-semibold tracking-tight text-card-foreground">
             No CRM access for this account
           </h1>
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-muted-foreground">
             You are signed in, but the app could not load a profile row for your auth user. In
-            Supabase, <span className="text-zinc-300">public.profiles.id</span> must equal{" "}
-            <span className="text-zinc-300">Authentication → Users → User UID</span> for this
-            session. If you created the profile by hand, the UUIDs often do not match.
+            Supabase, <span className="font-medium text-foreground">public.profiles.id</span> must
+            equal{" "}
+            <span className="font-medium text-foreground">Authentication → Users → User UID</span>{" "}
+            for this session. If you created the profile by hand, the UUIDs often do not match.
           </p>
-          <p className="break-all font-mono text-xs text-zinc-500">
+          <p className="break-all font-mono text-xs text-muted-foreground">
             Signed-in user id: {user.id}
           </p>
         </div>

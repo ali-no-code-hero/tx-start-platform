@@ -18,13 +18,7 @@ export function SignOutButton() {
   }
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      className="border-zinc-700 bg-transparent text-zinc-200"
-      disabled={loading}
-      onClick={() => void signOut()}
-    >
+    <Button type="button" variant="outline" disabled={loading} onClick={() => void signOut()}>
       {loading ? "Signing out…" : "Sign out"}
     </Button>
   );

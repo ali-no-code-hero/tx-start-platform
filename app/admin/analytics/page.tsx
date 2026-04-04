@@ -40,8 +40,8 @@ export default async function AnalyticsPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+      <div className="border-l-[3px] border-primary pl-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Analytics</h1>
         <p className="text-sm text-muted-foreground">
           {urlState.rangeStart} — {urlState.rangeEnd}
           {urlState.locationIds.length > 0 || urlState.includeUnassigned

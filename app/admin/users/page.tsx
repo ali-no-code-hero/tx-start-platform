@@ -35,8 +35,8 @@ export default async function AdminUsersPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+      <div className="border-l-[3px] border-primary pl-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Users</h1>
         <p className="text-sm text-muted-foreground">
           Invite staff and admins here. For borrower portal access, open an application and use{" "}
           <strong>Invite to customer portal</strong> (links the Supabase user to the CRM customer

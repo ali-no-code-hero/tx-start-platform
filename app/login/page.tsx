@@ -16,17 +16,32 @@ export default async function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-950 px-4">
-      <div className="w-full max-w-sm space-y-6 rounded-xl border border-zinc-800 bg-zinc-900/80 p-8 shadow-xl">
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand-navy-deep via-brand-navy to-[oklch(0.18_0.09_28)]"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute -left-24 top-1/4 size-72 rounded-full bg-brand-gold/15 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute -right-16 bottom-0 size-80 rounded-full bg-primary/20 blur-3xl"
+        aria-hidden
+      />
+      <div className="relative w-full max-w-sm space-y-6 rounded-2xl border border-white/15 bg-card/95 p-8 shadow-2xl shadow-black/25 backdrop-blur-sm">
         <div className="text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-50">
-            Texas Star Loan CRM
+          <p className="text-[0.65rem] font-bold uppercase tracking-[0.28em] text-primary">
+            Texas Star
+          </p>
+          <h1 className="mt-2 text-xl font-semibold tracking-tight text-card-foreground">
+            Loan CRM
           </h1>
-          <p className="mt-1 text-sm text-zinc-400">
+          <p className="mt-1 text-sm text-muted-foreground">
             Sign in with a one-time code sent to your email or phone
           </p>
         </div>
-        <Suspense fallback={<p className="text-center text-sm text-zinc-500">Loading…</p>}>
+        <Suspense fallback={<p className="text-center text-sm text-muted-foreground">Loading…</p>}>
           <LoginForm />
         </Suspense>
       </div>

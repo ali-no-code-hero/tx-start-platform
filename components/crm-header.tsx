@@ -22,40 +22,65 @@ export function CrmHeader({ role, email }: CrmHeaderProps) {
   }
 
   return (
-    <header className="border-b border-border bg-card">
+    <header className="border-b border-white/10 bg-brand-navy shadow-md shadow-black/15">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-        <nav className="flex items-center gap-4 text-sm font-medium">
-          <Link href="/applications" className="text-foreground hover:underline">
-            Applications
-          </Link>
-          {role === "admin" && (
-            <>
-              <Link href="/admin/users" className="text-muted-foreground hover:text-foreground">
-                Users
-              </Link>
-              <Link href="/admin/locations" className="text-muted-foreground hover:text-foreground">
-                Locations
-              </Link>
-              <Link href="/admin/analytics" className="text-muted-foreground hover:text-foreground">
-                Analytics
-              </Link>
-              <Link
-                href="/admin/automation-rules"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                Automation
-              </Link>
-              <Link href="/admin/import" className="text-muted-foreground hover:text-foreground">
-                Import
-              </Link>
-            </>
-          )}
-        </nav>
-        <div className="flex items-center gap-3">
-          <span className="hidden truncate text-xs text-muted-foreground sm:inline max-w-[200px]">
+        <div className="flex min-w-0 items-center gap-5">
+          <span className="hidden shrink-0 text-xs font-bold uppercase tracking-[0.2em] text-brand-gold/95 sm:inline">
+            Texas Star
+          </span>
+          <nav className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-medium">
+            <Link
+              href="/applications"
+              className="text-white underline decoration-brand-gold decoration-2 underline-offset-4 hover:text-brand-gold"
+            >
+              Applications
+            </Link>
+            {role === "admin" && (
+              <>
+                <Link
+                  href="/admin/users"
+                  className="text-white/75 transition-colors hover:text-brand-gold"
+                >
+                  Users
+                </Link>
+                <Link
+                  href="/admin/locations"
+                  className="text-white/75 transition-colors hover:text-brand-gold"
+                >
+                  Locations
+                </Link>
+                <Link
+                  href="/admin/analytics"
+                  className="text-white/75 transition-colors hover:text-brand-gold"
+                >
+                  Analytics
+                </Link>
+                <Link
+                  href="/admin/automation-rules"
+                  className="text-white/75 transition-colors hover:text-brand-gold"
+                >
+                  Automation
+                </Link>
+                <Link
+                  href="/admin/import"
+                  className="text-white/75 transition-colors hover:text-brand-gold"
+                >
+                  Import
+                </Link>
+              </>
+            )}
+          </nav>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="hidden truncate text-xs text-white/60 sm:inline max-w-[200px]">
             {email}
           </span>
-          <Button variant="outline" size="sm" onClick={() => void signOut()}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/35 bg-white/5 text-white hover:bg-white/15 hover:text-white"
+            onClick={() => void signOut()}
+          >
             Sign out
           </Button>
         </div>

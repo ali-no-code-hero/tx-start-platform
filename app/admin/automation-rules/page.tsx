@@ -20,8 +20,8 @@ export default async function AdminAutomationRulesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Automation rules</h1>
+      <div className="border-l-[3px] border-primary pl-4">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Automation rules</h1>
         <p className="text-sm text-muted-foreground">
           Send SMS (Twilio) or email (Resend) when an application stays in a status for the
           configured delay. Placeholders: {"{{first_name}}"}, {"{{last_name}}"}, {"{{status}}"}. Cron
